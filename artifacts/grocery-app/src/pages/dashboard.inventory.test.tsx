@@ -2294,6 +2294,7 @@ describe("inventory edit conflicts", () => {
 describe("inventory native validation", () => {
   it("keeps the edit dialog open when native invalid is raised", async () => {
     const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
     globalThis.fetch = api.fetch;
     renderApp("/inventory");
     await screen.findByTestId("inventory-item-1");
