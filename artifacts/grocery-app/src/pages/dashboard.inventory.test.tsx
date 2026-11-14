@@ -2241,7 +2241,7 @@ describe("inventory edit conflicts", () => {
     fireEvent.click(await screen.findByTestId("button-edit-1"));
     await screen.findByTestId("dialog-inventory-item");
     changeInput("input-item-notes", "Keep my draft");
-    api.items[0] = { ...api.items[0]!, quantity: 7, revision: 1 };
+    api.items[0] = { ...api.items[0]!, quantity: 7, unit: "grams", revision: 1 };
 
     fireEvent.click(screen.getByTestId("button-save-item"));
     await screen.findByTestId("inventory-conflict");
@@ -2256,6 +2256,8 @@ describe("inventory edit conflicts", () => {
       (screen.getByTestId("input-item-quantity") as HTMLInputElement).value,
       "7",
     );
+    assert.equal((screen.getByTestId("input-item-unit") as HTMLSelectElement).value, "Custom");
+    assert.equal((screen.getByTestId("input-item-custom-unit") as HTMLInputElement).value, "grams");
     changeInput("input-item-notes", "Reviewed latest");
     fireEvent.click(screen.getByTestId("button-save-item"));
     await waitFor(() => {
@@ -2293,7 +2295,9 @@ describe("inventory native validation", () => {
   it("keeps the edit dialog open when native invalid is raised", async () => {
     const api = new GroceryApiMock();
     globalThis.fetch = api.fetch;
-    renderApp();
+    renderApp("/inventory");
+    await screen.findByTestId("inventory-item-1");
+    fireEvent.click(screen.getByTestId("button-edit-1"));
 
     await screen.findByTestId("dialog-inventory-item");
     const quantity = screen.getByTestId("input-item-quantity");

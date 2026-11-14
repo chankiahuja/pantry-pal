@@ -93,10 +93,11 @@ export function InventoryItemDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [focusNameAfterSave, setFocusNameAfterSave] = useState(false);
   const submitIntent = useRef<"close" | "continue">("close");
-  const dialogSession = useRef(0);
-  const openState = useRef(open);
   const [isReviewing, setIsReviewing] = useState(false);
   const [hasConflict, setHasConflict] = useState(false);
+  const [unitSelectorKey, setUnitSelectorKey] = useState(0);
+  const dialogSession = useRef(0);
+  const openState = useRef(open);
   const lastFormReset = useRef<{ session: number; itemId: number | null } | null>(null);
   const activeItemId = useRef<number | null>(item?.id ?? null);
   const formRevision = useRef<number | null>(null);
@@ -208,6 +209,7 @@ export function InventoryItemDialog({
       ) return;
       refreshPantry(queryClient, latest);
       formRevision.current = latest.revision;
+      setUnitSelectorKey((key) => key + 1);
       form.reset({
         name: latest.name,
         category: latest.category,
@@ -262,19 +264,20 @@ export function InventoryItemDialog({
           id: item.id,
           data: update,
         });
-        if (!isCurrentSubmission()) return;
-        if (values.quantity === 0) {
-          notifyOutOfStock(values.name);
-          toast({
-            title: `${values.name} is out of stock`,
-            description: "Consider adding it to a shopping list.",
-            variant: "destructive",
-          });
-        } else {
-          toast({
-            title: "Item updated",
-            description: `${values.name} has been updated.`,
-          });
+        if (isCurrentSubmission()) {
+          if (values.quantity === 0) {
+            notifyOutOfStock(values.name);
+            toast({
+              title: `${values.name} is out of stock`,
+              description: "Consider adding it to a shopping list.",
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: "Item updated",
+              description: `${values.name} has been updated.`,
+            });
+          }
         }
       } else {
         const input: InventoryItemInput = {
@@ -435,7 +438,7 @@ export function InventoryItemDialog({
                     <FormLabel>Unit</FormLabel>
                     <FormControl>
                       <UnitSelector
-                        key={`${item?.id ?? "new"}-${open}`}
+                        key={`${item?.id ?? "new"}-${open}-${unitSelectorKey}`}
                         value={field.value}
                         onChange={field.onChange}
                         disabled={isSubmitting || isReviewing}
