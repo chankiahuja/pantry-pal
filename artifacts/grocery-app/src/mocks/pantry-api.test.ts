@@ -177,7 +177,12 @@ test("consume and restock adjust quantities, preserve item fields, and persist",
   const item = await consumed.json();
   assert.equal(item.quantity, 2.5);
   assert.notEqual(item.updatedAt, "2000-01-01T00:00:00.000Z");
-  assert.deepEqual(item, { ...original, quantity: 2.5, updatedAt: item.updatedAt });
+  assert.deepEqual(item, {
+    ...original,
+    quantity: 2.5,
+    revision: original.revision + 1,
+    updatedAt: item.updatedAt,
+  });
   const restocked = await adjust(api, { operation: "restock", amount: 0.5 }, "restock");
   assert.equal(restocked.status, 200);
   assert.equal((await restocked.json()).quantity, 3);
