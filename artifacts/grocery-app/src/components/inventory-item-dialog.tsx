@@ -222,7 +222,7 @@ export function InventoryItemDialog({
       setHasConflict(false);
       toast({
         title: "Latest item loaded",
-        description: "Review the current values before saving again.",
+        description: "Your draft was replaced with the current saved values. Review them before saving again.",
       });
     } catch {
       if (
@@ -260,10 +260,11 @@ export function InventoryItemDialog({
           expiresAt: nullableValue(values.expiresAt),
           notes: nullableValue(values.notes),
         };
-        await updateItem.mutateAsync({
+        const updatedItem = await updateItem.mutateAsync({
           id: item.id,
           data: update,
         });
+        refreshPantry(queryClient, updatedItem);
         if (isCurrentSubmission()) {
           if (values.quantity === 0) {
             notifyOutOfStock(values.name);
@@ -370,7 +371,7 @@ export function InventoryItemDialog({
           <Alert variant="destructive" data-testid="inventory-conflict">
             <AlertTitle>Item changed elsewhere</AlertTitle>
             <AlertDescription>
-              Your draft is preserved. Load the latest values to review the change before saving again.
+              Your draft is preserved. Review latest replaces your draft with the current saved values.
               <Button
                 type="button"
                 variant="outline"

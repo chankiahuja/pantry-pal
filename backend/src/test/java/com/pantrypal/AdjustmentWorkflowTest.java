@@ -191,11 +191,20 @@ class AdjustmentWorkflowTest {
         }
     }
 
+    int staleQuantityEditOutcome(long id, String notes, double quantity, long revision) {
+        try {
+            service.saveInventory(null, id, Map.of("notes", notes, "quantity", quantity), revision);
+            return 200;
+        } catch (ResponseStatusException failure) {
+            return failure.getStatusCode().value();
+        }
+    }
+
     @Test void editRacingWithAdjustmentCannotRestoreAnOlderQuantity() throws Exception {
         long id = item(5);
         try {
             List<Integer> outcomes = race(
-                () -> editOutcome(id, "snapshot edit", 0),
+                () -> staleQuantityEditOutcome(id, "snapshot edit", 5, 0),
                 () -> adjustmentOutcome(id));
             assertThat(outcomes).contains(200);
             assertThat(row(id).get("quantity")).isEqualTo(3.0);
