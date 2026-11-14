@@ -37,6 +37,25 @@ type State = {
   nextId: number;
 };
 
+function storedRevision(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function normalizeState(state: State): State {
+  const revisions = { ...(state.revisions ?? {}) };
+  const inventory = state.inventory.map((item) => {
+    const revision = Math.max(
+      storedRevision(item.revision) ?? 0,
+      storedRevision(revisions[item.id]) ?? 0,
+    );
+    revisions[item.id] = revision;
+    return { ...item, revision };
+  });
+  return { ...state, inventory, revisions };
+}
+
 export function seedState(): State {
   const now = new Date().toISOString();
   const date = (days: number) =>
@@ -65,6 +84,7 @@ export function seedState(): State {
       minThreshold,
       expiresAt: days === null ? null : date(days),
       notes: null,
+      revision: 0,
       createdAt: now,
       updatedAt: now,
     }),
@@ -111,9 +131,12 @@ export function seedState(): State {
 /** Browser-only demo adapter, using the same REST response shapes as Spring. */
 export class MockPantryApi {
   constructor(
-    public state: State = seedState(),
+    state: State = seedState(),
     private persist: (state: State) => void = () => {},
-  ) {}
+  ) {
+    this.state = normalizeState(state);
+  }
+  public state: State;
   private json(data: unknown, status = 200) {
     return new Response(status === 204 ? null : JSON.stringify(data), {
       status,
@@ -185,7 +208,11 @@ export class MockPantryApi {
     const missing = () => this.json({ error: "Resource not found" }, 404);
     const revise = (itemId: number) => {
       const revisions = (this.state.revisions ??= {});
-      return (revisions[itemId] = (revisions[itemId] ?? 0) + 1);
+      const item = this.state.inventory.find((entry) => entry.id === itemId);
+      const next = (item?.revision ?? revisions[itemId] ?? 0) + 1;
+      revisions[itemId] = next;
+      if (item) item.revision = next;
+      return next;
     };
 
     if (parts[0] === "healthz") return this.json({ status: "ok" });
@@ -295,6 +322,7 @@ export class MockPantryApi {
           const item: InventoryItem = {
             ...body,
             id: this.state.nextId++,
+            revision: 0,
             expiresAt: body.expiresAt || null,
             notes: body.notes ?? null,
             createdAt: now,
@@ -317,11 +345,11 @@ export class MockPantryApi {
             return this.json({ error: "Historical adjustment cannot be undone" }, 409);
           if (Date.now() >= adjustment.expiresAt)
             return this.json({ error: "Undo window expired" }, 410);
-          if (this.state.revisions?.[id] !== adjustment.revision)
+          if (item.revision !== adjustment.revision)
             return this.json({ error: "Inventory changed after adjustment" }, 409);
           item.quantity = adjustment.previousQuantity;
           item.updatedAt = now;
-          revise(id);
+          item.revision = revise(id);
           adjustment.undone = true;
           return save({ status: "undone", inventory: item });
         }
@@ -353,21 +381,29 @@ export class MockPantryApi {
           const previousQuantity = item.quantity;
           item.quantity += operation === "consume" ? -amount : amount;
           item.updatedAt = now;
+          const revision = revise(id);
+          item.revision = revision;
           (this.state.adjustments ??= []).push({
             inventoryItemId: id,
             key,
             operation,
             amount,
             previousQuantity,
-            revision: revise(id),
+            revision,
             expiresAt: Date.now() + 5 * 60_000,
           });
           return save(item);
         }
         if (method === "GET") return this.json(item);
         if (method === "PATCH") {
-          Object.assign(item, body, { updatedAt: now });
-          revise(id);
+          const expectedRevision = body?.revision;
+          if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+            return this.json({ error: "revision must be a non-negative integer" }, 400);
+          if (item.revision !== expectedRevision)
+            return this.json({ error: "Inventory item was modified; review the latest values before saving" }, 409);
+          const { revision: _revision, ...changes } = body;
+          Object.assign(item, changes, { updatedAt: now });
+          item.revision = revise(id);
           return save(item);
         }
         if (method === "DELETE") {
@@ -440,7 +476,7 @@ export class MockPantryApi {
           if (row.purchased && item && !this.state.applied.includes(row.id)) {
             item.quantity += row.quantity;
             item.updatedAt = now;
-            revise(item.id);
+            item.revision = revise(item.id);
             this.state.applied.push(row.id);
             count++;
           }

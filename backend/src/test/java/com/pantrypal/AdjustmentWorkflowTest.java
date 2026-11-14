@@ -168,6 +168,94 @@ class AdjustmentWorkflowTest {
         catch (ResponseStatusException failure) { return failure.getStatusCode().value(); }
     }
 
+    @Test void concurrentEditsWithTheSameRevisionAllowOnlyOneSnapshot() throws Exception {
+        long id = item(5);
+        try {
+            List<Integer> outcomes = race(
+                () -> editOutcome(id, "first", 0),
+                () -> editOutcome(id, "second", 0));
+            assertThat(outcomes).containsExactlyInAnyOrder(200, 409);
+            Map<String,Object> current = row(id);
+            assertThat(current.get("revision")).isEqualTo(1L);
+            assertThat(current.get("notes")).isIn("first", "second");
+            assertThat(current.get("quantity")).isEqualTo(5.0);
+        } finally { service.deleteInventory(id); }
+    }
+
+    int editOutcome(long id, String notes, long revision) {
+        try {
+            service.saveInventory(null, id, Map.of("notes", notes), revision);
+            return 200;
+        } catch (ResponseStatusException failure) {
+            return failure.getStatusCode().value();
+        }
+    }
+
+    @Test void editRacingWithAdjustmentCannotRestoreAnOlderQuantity() throws Exception {
+        long id = item(5);
+        try {
+            List<Integer> outcomes = race(
+                () -> editOutcome(id, "snapshot edit", 0),
+                () -> adjustmentOutcome(id));
+            assertThat(outcomes).contains(200);
+            assertThat(row(id).get("quantity")).isEqualTo(3.0);
+            assertThat(row(id).get("revision")).isIn(1L, 2L);
+        } finally { service.deleteInventory(id); }
+    }
+
+    int adjustmentOutcome(long id) {
+        try {
+            adjust(id, "edit-race-adjustment", "consume", 2);
+            return 200;
+        } catch (ResponseStatusException failure) {
+            return failure.getStatusCode().value();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings={"consume", "restock", "purchase", "undo"})
+    void olderInventoryEditCannotOverwriteAnyStockMutation(String mutation) {
+        long id = item(5);
+        Long listId = null;
+        try {
+            switch (mutation) {
+                case "consume", "restock" -> adjust(id, "stale-edit-" + mutation, mutation, 1);
+                case "undo" -> {
+                    adjust(id, "stale-edit-undo", "consume", 1);
+                    service.undoInventoryAdjustment(id, Map.of("idempotencyKey", "stale-edit-undo"));
+                }
+                case "purchase" -> {
+                    listId = PantryService.id(service.createList(Map.of("name", "Purchase revision test")));
+                    long listItemId = PantryService.id(service.addItem(listId, Map.of(
+                        "name", "Workflow test", "category", "Dairy", "quantity", 1,
+                        "unit", "litres", "inventoryItemId", id)));
+                    service.updateItem(listId, listItemId, Map.of("purchased", true));
+                    service.purchase(listId);
+                }
+            }
+            assertThat(editOutcome(id, "stale edit", 0)).isEqualTo(409);
+            assertThat(row(id).get("revision")).isEqualTo(mutation.equals("undo") ? 2L : 1L);
+        } finally {
+            if (listId != null) service.deleteList(listId);
+            service.deleteInventory(id);
+        }
+    }
+
+    @Test void inventoryEditRequiresAValidRevisionAndRejectedWritesAreUnchanged() throws Exception {
+        long id = item(5);
+        try {
+            Map<String,Object> before = row(id);
+            mvc.perform(patch("/api/inventory/" + id).contentType("application/json")
+                .content("{\"notes\":\"missing\"}"))
+                .andExpect(status().isBadRequest());
+            mvc.perform(patch("/api/inventory/" + id).contentType("application/json")
+                .content("{\"notes\":\"malformed\",\"revision\":1.5}"))
+                .andExpect(status().isBadRequest());
+            assertThat(row(id)).isEqualTo(before);
+            assertThat(repo.query("SELECT * FROM inventory_adjustments WHERE inventory_item_id=?", id)).isEmpty();
+        } finally { service.deleteInventory(id); }
+    }
+
     @ParameterizedTest @ValueSource(strings={"{}", "{\"operation\":\"consume\"}",
         "{\"operation\":\"consume\",\"amount\":null}", "{\"operation\":\"consume\",\"amount\":\"2\"}",
         "{\"operation\":\"consume\",\"amount\":true}", "{\"operation\":\"replace\",\"amount\":1}"})

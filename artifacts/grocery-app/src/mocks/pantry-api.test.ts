@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MockPantryApi, seedState } from "./pantry-api";
+import type { InventoryItem } from "@workspace/api-client-react";
 
 test("demo shopping-list creation and rename share Unicode name validation", async () => {
   const api = new MockPantryApi();
@@ -79,7 +80,7 @@ test("expired demo alerts clear on correction and never create expiry-only purch
   assert.equal(invalid.status, 400);
   const list = await (await api.fetch("/api/suggestions/generate-list", { method: "POST" })).json();
   assert.deepEqual(list.items.map((i: any) => i.inventoryItemId), [102, 103]);
-  await api.fetch("/api/inventory/101", { method: "PATCH", body: JSON.stringify({ expiresAt: null }) });
+  await api.fetch("/api/inventory/101", { method: "PATCH", body: JSON.stringify({ expiresAt: null, revision: api.state.inventory.find((item) => item.id === 101)!.revision }) });
   await api.fetch("/api/inventory/102", { method: "DELETE" });
   assert.equal((await (await api.fetch("/api/inventory/stats")).json()).expiredCount, 0);
   assert.ok((await (await api.fetch("/api/suggestions")).json()).every((a: any) => a.urgency !== "expired"));
@@ -136,7 +137,10 @@ test("demo Undo rejects expired, historical, missing and intervening writes incl
     if (change === "expiry") api.state.adjustments![0].expiresAt = Date.now() - 1;
     if (change === "historical") delete api.state.adjustments![0].revision;
     if (change === "edit") {
-      for (const quantity of [2, 1]) await api.fetch("/api/inventory/1", { method: "PATCH", body: JSON.stringify({ quantity }) });
+      for (const quantity of [2, 1]) {
+        const item = api.state.inventory.find((candidate) => candidate.id === 1)!;
+        await api.fetch("/api/inventory/1", { method: "PATCH", body: JSON.stringify({ quantity, revision: item.revision }) });
+      }
     }
     if (change === "adjustment") await adjust(api, { operation: "consume", amount: 1 }, "later", 1);
     if (change === "purchase") {
@@ -244,7 +248,7 @@ test("replay returns current inventory without a mutation and rejects conflictin
   assert.equal((await adjust(api, body)).status, 200);
   assert.equal(saves, 1);
   await api.fetch("/api/inventory/2", {
-    method: "PATCH", body: JSON.stringify({ quantity: 0, notes: "Changed later" }),
+    method: "PATCH", body: JSON.stringify({ quantity: 0, notes: "Changed later", revision: api.state.inventory.find((item) => item.id === 2)!.revision }),
   });
   const before = JSON.stringify(api.state);
   const replay = await adjust(api, body);
@@ -280,6 +284,38 @@ test("old demo state accepts adjustments and persisted keys survive a storage ro
   assert.equal((await replay.json()).quantity, 6);
   assert.equal(replaySaves, 0);
   assert.equal((await adjust(reloaded, { ...body, amount: 3 })).status, 400);
+});
+
+test("legacy mock inventory normalizes revisions and rejects stale edits after purchase", async () => {
+  const legacy = seedState();
+  delete legacy.revisions;
+  delete (legacy.inventory[0] as Partial<InventoryItem>).revision;
+  const api = new MockPantryApi(legacy);
+  const startingRevision = api.state.inventory[0]!.revision;
+  assert.equal(startingRevision, 0);
+
+  const missing = await api.fetch("/api/inventory/1", {
+    method: "PATCH",
+    body: JSON.stringify({ notes: "missing revision" }),
+  });
+  assert.equal(missing.status, 400);
+  assert.equal(api.state.inventory[0]!.notes, null);
+
+  await api.fetch("/api/shopping-lists/20/items/21", {
+    method: "PATCH",
+    body: JSON.stringify({ purchased: true }),
+  });
+  await api.fetch("/api/shopping-lists/20/purchase", { method: "POST" });
+  assert.equal(api.state.inventory[0]!.quantity, 2);
+  assert.equal(api.state.inventory[0]!.revision, 1);
+
+  const stale = await api.fetch("/api/inventory/1", {
+    method: "PATCH",
+    body: JSON.stringify({ quantity: 99, revision: startingRevision }),
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(api.state.inventory[0]!.quantity, 2);
+  assert.equal(api.state.inventory[0]!.revision, 1);
 });
 
 test("demo reviewed list preserves quantities and exclusions through reload and purchase", async () => {
@@ -404,7 +440,7 @@ test("demo shortage to shopping to restock is repeat-safe and persists changes",
     minThreshold: 1,
     unit: "boxes",
   });
-  await call(`inventory/${item.id}`, "PATCH", { quantity: 0 });
+  await call(`inventory/${item.id}`, "PATCH", { quantity: 0, revision: item.revision });
   assert.ok(
     !(await call("inventory?category=Beverages&lowStock=true")).some(
       (i: { id: number }) => i.id === item.id,

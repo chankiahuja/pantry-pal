@@ -55,7 +55,7 @@ class InventoryUndoTest {
                 .andExpect(jsonPath("$.inventory.quantity").value(5))
                 .andExpect(jsonPath("$.inventory.notes").value("Keep notes"))
                 .andExpect(jsonPath("$.inventory.expiresAt").value("2027-01-01"))
-                .andExpect(jsonPath("$.inventory.revision").doesNotExist());
+                .andExpect(jsonPath("$.inventory.revision").value(2));
             var after = row(id);
             assertThat(undo(id, "original").get("status")).isEqualTo("already_undone");
             assertThat(row(id)).isEqualTo(after);
@@ -70,8 +70,8 @@ class InventoryUndoTest {
             var replayInventory = (Map<?,?>) replay.get("inventory");
             assertThat(replayInventory.get("notes")).isEqualTo("New notes");
             assertThat(replayInventory.get("quantity")).isEqualTo(8.0);
-            assertThat(service.inventory(id)).doesNotContainKey("revision");
-            assertThat(service.inventory()).allSatisfy(i -> assertThat(i).doesNotContainKey("revision"));
+            assertThat(service.inventory(id).get("revision")).isEqualTo(3L);
+            assertThat(service.inventory()).allSatisfy(i -> assertThat(i).containsKey("revision"));
         } finally { service.deleteInventory(id); }
     }
 

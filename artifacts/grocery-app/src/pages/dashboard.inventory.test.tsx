@@ -125,6 +125,7 @@ function dashboardItem(
     minThreshold,
     expiresAt,
     notes: null,
+    revision: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -236,6 +237,7 @@ class GroceryApiMock {
           minThreshold: Number(input.minThreshold),
           expiresAt: input.expiresAt ? String(input.expiresAt) : null,
           notes: input.notes ? String(input.notes) : null,
+          revision: 0,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -278,13 +280,21 @@ class GroceryApiMock {
     }
 
     const inventoryItemMatch = url.pathname.match(/^\/api\/inventory\/(\d+)$/);
+    if (inventoryItemMatch && method === "GET") {
+      const item = this.items.find((candidate) => candidate.id === Number(inventoryItemMatch[1]));
+      return item ? this.json({ ...item }) : this.json({ error: "Item not found" }, 404);
+    }
     if (inventoryItemMatch && method === "PATCH") {
       const id = Number(inventoryItemMatch[1]);
       const item = this.items.find((candidate) => candidate.id === id);
       if (!item) return this.json({ error: "Item not found" }, 404);
       const update = this.readBody(init);
       this.inventoryUpdateBodies.push(update);
-      Object.assign(item, update, { updatedAt: timestamp });
+      if (!Number.isSafeInteger(update.revision) || update.revision !== item.revision) {
+        return this.json({ error: "Inventory item was modified; review the latest values before saving" }, 409);
+      }
+      const { revision: _revision, ...changes } = update;
+      Object.assign(item, changes, { revision: item.revision + 1, updatedAt: timestamp });
       return this.json(item);
     }
     if (inventoryItemMatch && method === "DELETE") {
@@ -1764,6 +1774,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 1,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1776,6 +1787,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1788,6 +1800,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: expiringDate,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1800,6 +1813,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -2216,6 +2230,86 @@ describe("inventory quantity validation", () => {
   });
 });
 
+describe("inventory edit conflicts", () => {
+  it("preserves the draft, reviews latest values, and saves after review", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    await screen.findByTestId("dialog-inventory-item");
+    changeInput("input-item-notes", "Keep my draft");
+    api.items[0] = { ...api.items[0]!, quantity: 7, revision: 1 };
+
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    assert.equal(
+      (screen.getByTestId("input-item-notes") as HTMLTextAreaElement).value,
+      "Keep my draft",
+    );
+
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await screen.findByText("Latest item loaded");
+    assert.equal(
+      (screen.getByTestId("input-item-quantity") as HTMLInputElement).value,
+      "7",
+    );
+    changeInput("input-item-notes", "Reviewed latest");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => {
+      assert.equal(api.items[0]?.notes, "Reviewed latest");
+      assert.equal(api.items[0]?.revision, 2);
+    });
+    assert.equal(screen.queryByTestId("dialog-inventory-item"), null);
+  });
+
+  it("requires another review when a write intervenes after recovery", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    await screen.findByTestId("dialog-inventory-item");
+    api.items[0] = { ...api.items[0]!, revision: 1, quantity: 6 };
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await screen.findByText("Latest item loaded");
+
+    api.items[0] = { ...api.items[0]!, revision: 2, quantity: 8 };
+    changeInput("input-item-notes", "Must review again");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    assert.equal(api.items[0]?.notes, null);
+    assert.ok(screen.getByTestId("dialog-inventory-item"));
+  });
+});
+
+describe("inventory native validation", () => {
+  it("keeps the edit dialog open when native invalid is raised", async () => {
+    const api = new GroceryApiMock();
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("dialog-inventory-item");
+    const quantity = screen.getByTestId("input-item-quantity");
+    let invalidEvents = 0;
+    quantity.addEventListener("invalid", () => invalidEvents += 1, { once: true });
+
+    // JSDOM does not implement native number step validation; dispatch the event
+    // explicitly here while the real-browser check verifies validity.stepMismatch.
+    quantity.dispatchEvent(new Event("invalid", { bubbles: true, cancelable: true }));
+
+    assert.equal(invalidEvents, 1);
+    assert.ok(screen.getByTestId("dialog-inventory-item"));
+    assert.equal(api.inventoryUpdateBodies.length, 0);
+  });
+});
+
 describe("inventory optional field clearing", () => {
   it("persists expiry-only, notes-only, and combined clearing", async () => {
     const api = new GroceryApiMock();
@@ -2240,6 +2334,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: null,
       notes: "Keep dry",
+      revision: 0,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
@@ -2257,6 +2352,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: "2027-01-15",
       notes: null,
+      revision: 1,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
@@ -2276,6 +2372,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: null,
       notes: null,
+      revision: 2,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
