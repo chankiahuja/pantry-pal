@@ -1,0 +1,55 @@
+name: PostgreSQL verification
+
+on:
+  pull_request:
+    branches:
+      - GS-134
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-verification:
+    name: Revision, adjustment, purchase, Undo and isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: pantrypal_ci
+          POSTGRES_USER: pantrypal_ci
+          POSTGRES_PASSWORD: pantrypal_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pantrypal_ci -d pantrypal_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SPRING_PROFILES_ACTIVE: postgres-ci
+      DB_URL: jdbc:postgresql://127.0.0.1:5432/pantrypal_ci
+      DB_USER: pantrypal_ci
+      DB_PASSWORD: pantrypal_ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - name: Verify PostgreSQL concurrency and isolation behavior
+        working-directory: backend
+        run: >-
+          bash ./mvnw --batch-mode --no-transfer-progress
+          -Dtest=PostgresCiDatabaseGuardTest,AdjustmentWorkflowTest,InventoryUndoTest,AccountIsolationTest
+          test

@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useCreateInventoryItem,
   useUpdateInventoryItem,
+  getInventoryItem,
   getListInventoryItemsQueryKey,
   getGetInventoryStatsQueryKey,
   getGetGrocerySuggestionsQueryKey,
@@ -37,6 +38,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/use-notifications";
 import { isInvalidUnit } from "@/lib/inventory-units";
 import { UnitSelector } from "@/components/unit-selector";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { refreshPantry } from "@/lib/refresh-pantry";
 
 function nullableValue(value: string | undefined) {
   return value === "" || value === undefined ? null : value;
@@ -90,8 +93,14 @@ export function InventoryItemDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [focusNameAfterSave, setFocusNameAfterSave] = useState(false);
   const submitIntent = useRef<"close" | "continue">("close");
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [hasConflict, setHasConflict] = useState(false);
+  const [unitSelectorKey, setUnitSelectorKey] = useState(0);
   const dialogSession = useRef(0);
   const openState = useRef(open);
+  const lastFormReset = useRef<{ session: number; itemId: number | null } | null>(null);
+  const activeItemId = useRef<number | null>(item?.id ?? null);
+  const formRevision = useRef<number | null>(null);
   const activeSubmission = useRef<number | null>(null);
   const nextSubmission = useRef(0);
 
@@ -119,10 +128,23 @@ export function InventoryItemDialog({
         activeSubmission.current = null;
         setIsSubmitting(false);
         setFocusNameAfterSave(false);
+        formRevision.current = null;
+        activeItemId.current = null;
+        setIsReviewing(false);
+        setHasConflict(false);
       }
     }
 
     if (!open) return;
+
+    const itemId = item?.id ?? null;
+    if (
+      lastFormReset.current?.session === dialogSession.current &&
+      lastFormReset.current.itemId === itemId
+    ) return;
+    lastFormReset.current = { session: dialogSession.current, itemId };
+    activeItemId.current = itemId;
+    formRevision.current = item?.revision ?? null;
 
     form.reset({
       name: item?.name || "",
@@ -141,7 +163,6 @@ export function InventoryItemDialog({
     form.setFocus("name");
     setFocusNameAfterSave(false);
   }, [focusNameAfterSave, form, open]);
-
   const handleOpenChange = (nextOpen: boolean) => {
     if (openState.current !== nextOpen) {
       openState.current = nextOpen;
@@ -152,12 +173,71 @@ export function InventoryItemDialog({
       activeSubmission.current = null;
       setIsSubmitting(false);
       setFocusNameAfterSave(false);
+      activeSubmission.current = null;
+      formRevision.current = null;
+      activeItemId.current = null;
+      setIsReviewing(false);
+      setHasConflict(false);
     }
     onOpenChange(nextOpen);
   };
 
   const handleInvalidSubmit = () => {
     submitIntent.current = "close";
+  };
+
+  const isConflictError = (error: unknown) =>
+    typeof error === "object" && error !== null &&
+    "status" in error && (error as { status?: unknown }).status === 409;
+
+  const handleNativeInvalid = () => {
+    // Native validation owns the browser message; keep the dialog and draft in place.
+    submitIntent.current = "close";
+  };
+
+  const reviewLatest = async () => {
+    if (!item || isReviewing) return;
+    const reviewSession = dialogSession.current;
+    const itemId = item.id;
+    setIsReviewing(true);
+    try {
+      const latest = await getInventoryItem(itemId);
+      if (
+        dialogSession.current !== reviewSession ||
+        !openState.current ||
+        activeItemId.current !== itemId
+      ) return;
+      refreshPantry(queryClient, latest);
+      formRevision.current = latest.revision;
+      setUnitSelectorKey((key) => key + 1);
+      form.reset({
+        name: latest.name,
+        category: latest.category,
+        quantity: latest.quantity,
+        unit: latest.unit,
+        minThreshold: latest.minThreshold,
+        expiresAt: latest.expiresAt || "",
+        notes: latest.notes || "",
+      });
+      setHasConflict(false);
+      toast({
+        title: "Latest item loaded",
+        description: "Your draft was replaced with the current saved values. Review them before saving again.",
+      });
+    } catch {
+      if (
+        dialogSession.current !== reviewSession ||
+        !openState.current ||
+        activeItemId.current !== itemId
+      ) return;
+      toast({
+        title: "Unable to load the latest item",
+        description: "The item may have been deleted. Try again or close this dialog.",
+        variant: "destructive",
+      });
+    } finally {
+      if (dialogSession.current === reviewSession) setIsReviewing(false);
+    }
   };
 
   const onSubmit = async (values: FormValues) => {
@@ -176,13 +256,15 @@ export function InventoryItemDialog({
       if (item) {
         const update: InventoryItemUpdate = {
           ...values,
+          revision: formRevision.current ?? item.revision,
           expiresAt: nullableValue(values.expiresAt),
           notes: nullableValue(values.notes),
         };
-        await updateItem.mutateAsync({
+        const updatedItem = await updateItem.mutateAsync({
           id: item.id,
           data: update,
         });
+        refreshPantry(queryClient, updatedItem);
         if (isCurrentSubmission()) {
           if (values.quantity === 0) {
             notifyOutOfStock(values.name);
@@ -207,24 +289,22 @@ export function InventoryItemDialog({
         await createItem.mutateAsync({
           data: input,
         });
-        if (isCurrentSubmission()) {
-          if (values.quantity === 0) {
-            notifyOutOfStock(values.name);
-            toast({
+        if (isCurrentSubmission() && values.quantity === 0) {
+          notifyOutOfStock(values.name);
+          toast({
             title: `${values.name} added — and already out of stock`,
             description: shouldContinue
               ? "Add your next item."
               : "Consider adding it to a shopping list right away.",
             variant: "destructive",
-            });
-          } else {
-            toast({
-              title: "Item added",
-              description: shouldContinue
-                ? `${values.name} added. Add your next item.`
-                : `${values.name} has been added to inventory.`,
-            });
-          }
+          });
+        } else if (isCurrentSubmission()) {
+          toast({
+            title: "Item added",
+            description: shouldContinue
+              ? `${values.name} added. Add your next item.`
+              : `${values.name} has been added to inventory.`,
+          });
         }
       }
 
@@ -257,11 +337,20 @@ export function InventoryItemDialog({
       }
     } catch (error) {
       if (isCurrentSubmission()) {
-        toast({
-          title: "Error",
-          description: "Failed to save item. Please try again.",
-          variant: "destructive",
-        });
+        if (item && isConflictError(error)) {
+          setHasConflict(true);
+          toast({
+            title: "Item changed",
+            description: "Your draft is preserved. Review the latest item before saving again.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Error",
+            description: "Failed to save item. Please try again.",
+            variant: "destructive",
+          });
+        }
       }
     } finally {
       if (isCurrentSubmission()) {
@@ -278,10 +367,29 @@ export function InventoryItemDialog({
           <DialogTitle>{item ? "Edit Item" : "Add New Item"}</DialogTitle>
         </DialogHeader>
 
+        {hasConflict && item && (
+          <Alert variant="destructive" data-testid="inventory-conflict">
+            <AlertTitle>Item changed elsewhere</AlertTitle>
+            <AlertDescription>
+              Your draft is preserved. Review latest replaces your draft with the current saved values.
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3"
+                onClick={reviewLatest}
+                disabled={isReviewing}
+                data-testid="button-review-latest"
+              >
+                {isReviewing ? "Loading latest..." : "Review latest"}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit(onSubmit, handleInvalidSubmit)}
-            onInvalidCapture={handleInvalidSubmit}
+            onInvalidCapture={handleNativeInvalid}
             className="space-y-4"
           >
             <div className="grid grid-cols-2 gap-4">
@@ -294,7 +402,7 @@ export function InventoryItemDialog({
                     <FormControl>
                       <Input
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         placeholder="e.g. Milk"
                         data-testid="input-item-name"
                       />
@@ -313,7 +421,7 @@ export function InventoryItemDialog({
                     <FormControl>
                       <Input
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         placeholder="e.g. Dairy"
                         data-testid="input-item-category"
                       />
@@ -331,10 +439,10 @@ export function InventoryItemDialog({
                     <FormLabel>Unit</FormLabel>
                     <FormControl>
                       <UnitSelector
-                        key={`${item?.id ?? "new"}-${open}`}
+                        key={`${item?.id ?? "new"}-${open}-${unitSelectorKey}`}
                         value={field.value}
                         onChange={field.onChange}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         selectTestId="input-item-unit"
                         customInputTestId="input-item-custom-unit"
                         invalid={fieldState.invalid}
@@ -356,7 +464,7 @@ export function InventoryItemDialog({
                         type="number"
                         step="0.1"
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         data-testid="input-item-quantity"
                       />
                     </FormControl>
@@ -376,7 +484,7 @@ export function InventoryItemDialog({
                         type="number"
                         step="0.1"
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         data-testid="input-item-threshold"
                       />
                     </FormControl>
@@ -395,7 +503,7 @@ export function InventoryItemDialog({
                       <Input
                         type="date"
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         data-testid="input-item-expires"
                       />
                     </FormControl>
@@ -413,7 +521,7 @@ export function InventoryItemDialog({
                     <FormControl>
                       <Textarea
                         {...field}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isReviewing}
                         placeholder="Additional notes..."
                         data-testid="input-item-notes"
                       />
@@ -436,7 +544,7 @@ export function InventoryItemDialog({
               <Button
                 type="submit"
                 variant={item ? "default" : "outline"}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReviewing}
                 onClick={() => {
                   submitIntent.current = "close";
                 }}
@@ -447,7 +555,7 @@ export function InventoryItemDialog({
               {!item && (
                 <Button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isReviewing}
                   onClick={() => {
                     submitIntent.current = "continue";
                   }}

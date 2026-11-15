@@ -62,6 +62,7 @@ const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query
 const { Route, Router, Switch } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
 const {
+  getGetInventoryItemQueryKey,
   getGetGrocerySuggestionsQueryKey,
   getGetInventoryStatsQueryKey,
   getGetShoppingListQueryKey,
@@ -125,6 +126,7 @@ function dashboardItem(
     minThreshold,
     expiresAt,
     notes: null,
+    revision: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -142,6 +144,8 @@ class GroceryApiMock {
   rejectPendingCreate: (() => void) | null = null;
   inventoryUpdateBodies: Record<string, unknown>[] = [];
   inventoryGetMode: "normal" | "pending" | "error" = "normal";
+  inventoryItemGetMode: "normal" | "pending" | "error" = "normal";
+  resolveInventoryItemGet: (() => void) | null = null;
   shoppingList: ShoppingListWithItems = {
     id: 1,
     name: "Weekly shop",
@@ -236,6 +240,7 @@ class GroceryApiMock {
           minThreshold: Number(input.minThreshold),
           expiresAt: input.expiresAt ? String(input.expiresAt) : null,
           notes: input.notes ? String(input.notes) : null,
+          revision: 0,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -278,13 +283,35 @@ class GroceryApiMock {
     }
 
     const inventoryItemMatch = url.pathname.match(/^\/api\/inventory\/(\d+)$/);
+    if (inventoryItemMatch && method === "GET") {
+      const getItem = () => {
+        if (this.inventoryItemGetMode === "error") {
+          return this.json({ error: "Inventory unavailable" }, 500);
+        }
+        const item = this.items.find((candidate) => candidate.id === Number(inventoryItemMatch[1]));
+        return item ? this.json({ ...item }) : this.json({ error: "Item not found" }, 404);
+      };
+      if (this.inventoryItemGetMode === "pending") {
+        return new Promise<Response>((resolve) => {
+          this.resolveInventoryItemGet = () => {
+            this.resolveInventoryItemGet = null;
+            resolve(getItem());
+          };
+        });
+      }
+      return getItem();
+    }
     if (inventoryItemMatch && method === "PATCH") {
       const id = Number(inventoryItemMatch[1]);
       const item = this.items.find((candidate) => candidate.id === id);
       if (!item) return this.json({ error: "Item not found" }, 404);
       const update = this.readBody(init);
       this.inventoryUpdateBodies.push(update);
-      Object.assign(item, update, { updatedAt: timestamp });
+      if (!Number.isSafeInteger(update.revision) || update.revision !== item.revision) {
+        return this.json({ error: "Inventory item was modified; review the latest values before saving" }, 409);
+      }
+      const { revision: _revision, ...changes } = update;
+      Object.assign(item, changes, { revision: item.revision + 1, updatedAt: timestamp });
       return this.json(item);
     }
     if (inventoryItemMatch && method === "DELETE") {
@@ -689,7 +716,9 @@ describe("inventory save and continue", () => {
     const focusedInput = screen.getByTestId("input-item-category");
     focusedInput.focus();
 
-    api.resolvePendingCreate?.();
+    act(() => {
+      api.resolvePendingCreate?.();
+    });
     await waitFor(() => assert.equal(api.items.length, 1));
     assert.ok(screen.getByTestId("dialog-inventory-item"));
     assert.equal((screen.getByTestId("input-item-name") as HTMLInputElement).value, "New draft");
@@ -731,11 +760,10 @@ describe("inventory save and continue", () => {
     cancelButton.focus();
     assert.equal(document.activeElement, cancelButton);
 
-    await act(async () => {
+    act(() => {
       api.rejectPendingCreate?.();
-      await Promise.resolve();
     });
-    assert.ok(screen.getByTestId("dialog-inventory-item"));
+    await waitFor(() => assert.ok(screen.getByTestId("dialog-inventory-item")));
     assert.equal((screen.getByTestId("input-item-name") as HTMLInputElement).value, "New draft");
     assert.equal((screen.getByTestId("input-item-category") as HTMLInputElement).value, "Dairy");
     assert.equal((screen.getByTestId("input-item-custom-unit") as HTMLInputElement).value, "bottles");
@@ -743,7 +771,9 @@ describe("inventory save and continue", () => {
     assert.equal(api.resolvePendingCreate !== null, true);
     assert.equal(document.activeElement, cancelButton);
 
-    api.resolvePendingCreate?.();
+    act(() => {
+      api.resolvePendingCreate?.();
+    });
     await waitFor(() => assert.equal(api.items.length, 1));
     assert.equal(screen.queryByTestId("dialog-inventory-item"), null);
   });
@@ -1764,6 +1794,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 1,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1776,6 +1807,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1788,6 +1820,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: expiringDate,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -1800,6 +1833,7 @@ describe("dashboard inventory attention refresh", () => {
         minThreshold: 2,
         expiresAt: null,
         notes: null,
+        revision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -2216,6 +2250,189 @@ describe("inventory quantity validation", () => {
   });
 });
 
+describe("inventory edit conflicts", () => {
+  it("preserves the draft, reviews latest values, and saves after review", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    const { queryClient } = renderApp();
+    queryClient.setQueryData(getGetInventoryItemQueryKey(1), { ...api.items[0] });
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    await screen.findByTestId("dialog-inventory-item");
+    changeInput("input-item-notes", "Keep my draft");
+    api.items[0] = { ...api.items[0]!, quantity: 7, unit: "grams", revision: 1 };
+
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    assert.equal(
+      (screen.getByTestId("input-item-notes") as HTMLTextAreaElement).value,
+      "Keep my draft",
+    );
+
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await waitFor(() => {
+      assert.equal(
+        (screen.getByTestId("input-item-quantity") as HTMLInputElement).value,
+        "7",
+      );
+      assert.equal(screen.queryByTestId("inventory-conflict"), null);
+    });
+    assert.equal((screen.getByTestId("input-item-unit") as HTMLSelectElement).value, "Custom");
+    assert.equal((screen.getByTestId("input-item-custom-unit") as HTMLInputElement).value, "grams");
+    changeInput("input-item-notes", "Reviewed latest");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => {
+      assert.equal(api.items[0]?.notes, "Reviewed latest");
+      assert.equal(api.items[0]?.revision, 2);
+    });
+    assert.deepEqual(
+      queryClient.getQueryData(getGetInventoryItemQueryKey(1)),
+      api.items[0],
+    );
+    assert.equal(screen.queryByTestId("dialog-inventory-item"), null);
+  });
+
+  it("disables editing while delayed latest values replace the draft", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    changeInput("input-item-notes", "Draft that will be replaced");
+    api.items[0] = { ...api.items[0]!, quantity: 7, notes: "Saved elsewhere", revision: 1 };
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+
+    api.inventoryItemGetMode = "pending";
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await screen.findByText("Loading latest...");
+    assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).disabled, true);
+    assert.equal((screen.getByTestId("button-save-item") as HTMLButtonElement).disabled, true);
+    assert.equal(
+      screen.getByText(/Review latest replaces your draft with the current saved values/).textContent?.includes("replaces your draft"),
+      true,
+    );
+
+    await act(async () => {
+      api.resolveInventoryItemGet?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      assert.equal((screen.getByTestId("input-item-quantity") as HTMLInputElement).value, "7");
+      assert.equal(screen.queryByTestId("inventory-conflict"), null);
+    });
+    assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).value, "Saved elsewhere");
+    assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).disabled, false);
+  });
+
+  it("ignores delayed recovery after dismiss and reopen", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    api.items[0] = { ...api.items[0]!, quantity: 7, revision: 1 };
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    api.inventoryItemGetMode = "pending";
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await screen.findByText("Loading latest...");
+
+    fireEvent.click(screen.getByTestId("button-cancel"));
+    await waitFor(() => assert.equal(screen.queryByTestId("dialog-inventory-item"), null));
+    fireEvent.click(screen.getByTestId("button-edit-1"));
+    await screen.findByTestId("dialog-inventory-item");
+    changeInput("input-item-notes", "Reopened draft");
+
+    await act(async () => {
+      api.resolveInventoryItemGet?.();
+      await Promise.resolve();
+    });
+    assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).value, "Reopened draft");
+    assert.equal(screen.queryByText("Latest item loaded"), null);
+    assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).disabled, false);
+  });
+
+  it("preserves the draft and conflict when the item was deleted during recovery", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    changeInput("input-item-notes", "Keep after deletion");
+    api.items[0] = { ...api.items[0]!, revision: 1 };
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    api.items = [];
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+
+    await waitFor(() => {
+      assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).value, "Keep after deletion");
+      assert.ok(screen.getByTestId("inventory-conflict"));
+      assert.equal((screen.getByTestId("input-item-notes") as HTMLTextAreaElement).disabled, false);
+      assert.equal(screen.queryByText("Loading latest..."), null);
+    });
+  });
+
+  it("requires another review when a write intervenes after recovery", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await openInventory();
+    fireEvent.click(await screen.findByTestId("button-edit-1"));
+    await screen.findByTestId("dialog-inventory-item");
+    api.items[0] = { ...api.items[0]!, revision: 1, quantity: 6 };
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    fireEvent.click(screen.getByTestId("button-review-latest"));
+    await waitFor(() => {
+      assert.equal((screen.getByTestId("input-item-quantity") as HTMLInputElement).value, "6");
+      assert.equal(screen.queryByTestId("inventory-conflict"), null);
+    });
+
+    api.items[0] = { ...api.items[0]!, revision: 2, quantity: 8 };
+    changeInput("input-item-notes", "Must review again");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await screen.findByTestId("inventory-conflict");
+    assert.equal(api.items[0]?.notes, null);
+    assert.ok(screen.getByTestId("dialog-inventory-item"));
+  });
+});
+
+describe("inventory native validation", () => {
+  it("keeps the edit dialog open when native invalid is raised", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Rice", "Pantry", 4, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp("/inventory");
+    await screen.findByTestId("inventory-item-1");
+    fireEvent.click(screen.getByTestId("button-edit-1"));
+
+    await screen.findByTestId("dialog-inventory-item");
+    const quantity = screen.getByTestId("input-item-quantity");
+    let invalidEvents = 0;
+    quantity.addEventListener("invalid", () => invalidEvents += 1, { once: true });
+
+    // JSDOM does not implement native number step validation; dispatch the event
+    // explicitly here while the real-browser check verifies validity.stepMismatch.
+    quantity.dispatchEvent(new Event("invalid", { bubbles: true, cancelable: true }));
+
+    assert.equal(invalidEvents, 1);
+    assert.ok(screen.getByTestId("dialog-inventory-item"));
+    assert.equal(api.inventoryUpdateBodies.length, 0);
+  });
+});
+
 describe("inventory optional field clearing", () => {
   it("persists expiry-only, notes-only, and combined clearing", async () => {
     const api = new GroceryApiMock();
@@ -2240,6 +2457,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: null,
       notes: "Keep dry",
+      revision: 0,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
@@ -2257,6 +2475,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: "2027-01-15",
       notes: null,
+      revision: 1,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
@@ -2276,6 +2495,7 @@ describe("inventory optional field clearing", () => {
       minThreshold: 1,
       expiresAt: null,
       notes: null,
+      revision: 2,
     });
 
     fireEvent.click(screen.getByTestId("button-edit-1"));
