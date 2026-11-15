@@ -46,4 +46,25 @@ describe("attention state", () => {
     assert.equal(isShoppingEligible(item(3, "Empty", 0, 0, "2026-01-01")), true);
     assert.equal(isShoppingEligible(item(4, "Threshold zero", 1, 0)), false);
   });
+
+  it("covers the required fixed-clock dataset with eight affected and healthy boundary items", () => {
+    const rows = getAttentionItems([
+      item(1, "Expired and low", 1, 2, "2025-12-31"),
+      item(2, "Expired only", 4, 1, "2025-12-31"),
+      item(3, "Empty past", 0, 2, "2025-12-31"),
+      item(4, "Empty today", 0, 2, "2026-01-01"),
+      item(5, "Today", 4, 1, "2026-01-01"),
+      item(6, "Day seven", 4, 1, "2026-01-08"),
+      item(7, "Expiring and low", 1, 2, "2026-01-03"),
+      item(8, "Low only", 1, 2),
+      item(9, "Day eight", 4, 1, "2026-01-09"),
+      item(10, "Healthy", 4, 1),
+    ], now);
+    assert.deepEqual(rows.map((row) => row.id), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(rows.length, 8);
+    assert.equal(rows.find((row) => row.id === 3)?.conditions.expired, false);
+    assert.equal(rows.find((row) => row.id === 4)?.conditions.expiringSoon, false);
+    assert.equal(rows.find((row) => row.id === 7)?.primaryStatus, "expiringSoon");
+    assert.equal(rows.find((row) => row.id === 7)?.conditions.lowStock, true);
+  });
 });

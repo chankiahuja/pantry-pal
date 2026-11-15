@@ -1890,6 +1890,44 @@ describe("dashboard inventory attention refresh", () => {
     assert.equal(screen.queryByTestId("attention-list"), null);
   });
 
+  it("filters before truncation, expands the complete result, and collapses on category change", async () => {
+    const api = new GroceryApiMock();
+    api.items = [
+      ...Array.from({ length: 7 }, (_, index) => dashboardItem(index + 1, `Produce ${index + 1}`, "Produce", 0, 1)),
+      dashboardItem(8, "Pantry shortage", "Pantry", 1, 2),
+      dashboardItem(9, "Healthy staple", "Healthy", 5, 1),
+    ];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-list");
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 6);
+    fireEvent.click(screen.getByRole("button", { name: "View all 8 items" }));
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 8);
+
+    const category = screen.getByRole("combobox", { name: "Filter attention by category" });
+    fireEvent.change(category, { target: { value: "Produce" } });
+    await waitFor(() => assert.equal(screen.getAllByTestId(/^attention-item-/).length, 6));
+    assert.ok(screen.getByRole("button", { name: "View all 7 items" }));
+    fireEvent.click(screen.getByRole("button", { name: "View all 7 items" }));
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 7);
+    fireEvent.change(category, { target: { value: "Pantry" } });
+    await waitFor(() => assert.equal(screen.getAllByTestId(/^attention-item-/).length, 1));
+    assert.equal(screen.queryByRole("button", { name: "Show fewer" }), null);
+  });
+
+  it("renders one non-interactive row with a sibling item link and empty action slot", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Long custom-unit item", "A very long category", 0, 2)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    const row = await screen.findByTestId("attention-item-1");
+    assert.equal(row.querySelectorAll("a,button,input,select").length, 1);
+    assert.equal(row.querySelector("a")?.getAttribute("href"), "/inventory?item=1");
+    assert.equal(row.querySelector(".dashboard-attention-action-slot")?.querySelectorAll("*").length, 0);
+  });
+
   it("generates a linked shopping list from low-stock suggestions and restocks it", async () => {
     const api = new GroceryApiMock();
     api.items = [
