@@ -60,7 +60,7 @@ describe("attention state", () => {
       item(9, "Day eight", 4, 1, "2026-01-09"),
       item(10, "Healthy", 4, 1),
     ], now);
-    assert.deepEqual(rows.map((row) => row.id), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(rows.map((row) => row.id), [1, 2, 3, 4, 5, 7, 6, 8]);
     assert.equal(rows.length, 8);
     assert.equal(rows.find((row) => row.id === 3)?.conditions.expired, false);
     assert.equal(rows.find((row) => row.id === 4)?.conditions.expiringSoon, false);

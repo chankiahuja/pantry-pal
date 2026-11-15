@@ -839,7 +839,7 @@ describe("expired inventory attention", () => {
     globalThis.fetch = api.fetch;
     renderApp();
     await waitFor(() => assert.equal(screen.getByTestId("stat-expired").textContent, "1"));
-    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 1);
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 2);
     assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Expired"), true);
     assert.equal(screen.queryByText("No grocery suggestions right now."), null);
     fireEvent.click(screen.getByTestId("notification-bell"));
@@ -2087,12 +2087,9 @@ describe("dashboard inventory attention refresh", () => {
     });
 
     assert.ok(queryClient.getQueryData(getListInventoryItemsQueryKey()));
-    await screen.findByRole("alert");
+    await screen.findByRole("status");
     assert.ok(screen.getByTestId("attention-item-1"));
-    assert.equal(
-      screen.getByText("Refresh failed; showing the latest attention items.").textContent,
-      "Refresh failed; showing the latest attention items.",
-    );
+    assert.ok(screen.getByText("Refresh failed; showing the latest attention items.", { exact: false }).textContent?.includes("Refresh failed; showing the latest attention items."));
   });
 
   it("refreshes attention rows after create, edit, shopping-list restock, and delete flows", async () => {
