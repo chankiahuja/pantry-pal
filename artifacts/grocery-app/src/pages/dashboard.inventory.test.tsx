@@ -144,6 +144,7 @@ class GroceryApiMock {
   rejectPendingCreate: (() => void) | null = null;
   inventoryUpdateBodies: Record<string, unknown>[] = [];
   inventoryGetMode: "normal" | "pending" | "error" = "normal";
+  resolvePendingInventory: (() => void) | null = null;
   inventoryItemGetMode: "normal" | "pending" | "error" = "normal";
   resolveInventoryItemGet: (() => void) | null = null;
   shoppingList: ShoppingListWithItems = {
@@ -200,7 +201,11 @@ class GroceryApiMock {
         return this.json({ error: "Inventory unavailable" }, 500);
       }
       if (this.inventoryGetMode === "pending") {
-        return new Promise<Response>((_, reject) => {
+        return new Promise<Response>((resolve, reject) => {
+          this.resolvePendingInventory = () => {
+            this.resolvePendingInventory = null;
+            resolve(this.json([...this.items]));
+          };
           const signal = init?.signal;
           const abort = () =>
             reject(new DOMException("Request aborted", "AbortError"));
@@ -1861,6 +1866,31 @@ describe("dashboard inventory attention refresh", () => {
     assert.ok(screen.getByTestId("attention-item-3").textContent?.includes("Expiring Soon"));
   });
 
+  it("shows initial attention loading without presenting a healthy pantry", async () => {
+    const api = new GroceryApiMock();
+    api.inventoryGetMode = "pending";
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("pantry-attention-loading");
+    assert.equal(screen.queryByTestId("attention-healthy"), null);
+    api.resolvePendingInventory?.();
+    await screen.findByText("Your pantry is in good shape.");
+  });
+
+  it("removes the obsolete attention headings and duplicate suggestion list", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    assert.equal(screen.queryByText("Pantry Attention by Category"), null);
+    assert.equal(screen.queryByText("Grocery Suggestions & Alerts"), null);
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 1);
+    assert.equal(screen.queryByTestId("grocery-suggestions-alerts"), null);
+  });
+
   it("renders exact attention totals and Out, Low, and Expiring counts per category", async () => {
     const api = new GroceryApiMock();
     api.items = [
@@ -1918,6 +1948,47 @@ describe("dashboard inventory attention refresh", () => {
     await screen.findByTestId("attention-item-1");
     await screen.findByText("Shopping suggestions could not be loaded.");
     assert.equal(screen.queryByText("No grocery suggestions right now."), null);
+  });
+
+  it("keeps attention rows usable while suggestions are loading", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    const originalFetch = api.fetch;
+    let resolveSuggestions = () => {};
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.toString(), "http://localhost");
+      if (url.pathname === "/api/suggestions") {
+        return new Promise<Response>((resolve) => {
+          resolveSuggestions = () => resolve(originalFetch(input, init));
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    const reviewButton = screen.getByTestId("button-generate-shopping-list") as HTMLButtonElement;
+    assert.equal(reviewButton.disabled, true);
+    assert.ok(screen.getByTestId("attention-item-1"));
+    resolveSuggestions();
+    await waitFor(() => assert.equal(reviewButton.disabled, false));
+  });
+
+  it("returns from a filtered-empty category to all categories", async () => {
+    const api = new GroceryApiMock();
+    api.items = [
+      dashboardItem(1, "Shortage", "Pantry", 0, 1),
+      dashboardItem(2, "Healthy", "Bakery", 5, 1),
+    ];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter attention by category" }), { target: { value: "Bakery" } });
+    await screen.findByText("No items in Bakery need attention");
+    fireEvent.click(screen.getByRole("button", { name: "Show all categories" }));
+    await screen.findByTestId("attention-item-1");
+    assert.equal(screen.queryByTestId("attention-filtered-empty"), null);
   });
 
   it("filters before truncation, expands the complete result, and collapses on category change", async () => {
