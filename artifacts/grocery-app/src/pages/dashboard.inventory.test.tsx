@@ -144,6 +144,7 @@ class GroceryApiMock {
   rejectPendingCreate: (() => void) | null = null;
   inventoryUpdateBodies: Record<string, unknown>[] = [];
   inventoryGetMode: "normal" | "pending" | "error" = "normal";
+  resolvePendingInventory: (() => void) | null = null;
   inventoryItemGetMode: "normal" | "pending" | "error" = "normal";
   resolveInventoryItemGet: (() => void) | null = null;
   shoppingList: ShoppingListWithItems = {
@@ -200,7 +201,11 @@ class GroceryApiMock {
         return this.json({ error: "Inventory unavailable" }, 500);
       }
       if (this.inventoryGetMode === "pending") {
-        return new Promise<Response>((_, reject) => {
+        return new Promise<Response>((resolve, reject) => {
+          this.resolvePendingInventory = () => {
+            this.resolvePendingInventory = null;
+            resolve(this.json([...this.items]));
+          };
           const signal = init?.signal;
           const abort = () =>
             reject(new DOMException("Request aborted", "AbortError"));
@@ -827,7 +832,7 @@ describe("expired inventory attention", () => {
     await act(async () => { context.mock.timers.tick(30_000); });
     await waitFor(() => assert.equal(screen.getByTestId("stat-expired").textContent, "1"));
     assert.equal(screen.getByTestId("stat-expiring").textContent, "0");
-    assert.equal(screen.getByTestId("category-attention-dairy-expired-count").textContent, "1");
+    assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Expired"), true);
   });
 
   it("shows expired and low alerts, links to the exact item, and clears after correcting its date", async () => {
@@ -839,8 +844,8 @@ describe("expired inventory attention", () => {
     globalThis.fetch = api.fetch;
     renderApp();
     await waitFor(() => assert.equal(screen.getByTestId("stat-expired").textContent, "1"));
-    assert.equal(screen.getByTestId("category-attention-dairy-total").textContent, "2");
-    assert.equal(screen.getByTestId("category-attention-dairy-expired-count").textContent, "1");
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 2);
+    assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Expired"), true);
     assert.equal(screen.queryByText("No grocery suggestions right now."), null);
     fireEvent.click(screen.getByTestId("notification-bell"));
     const panel = screen.getByRole("button", { name: "Close notifications" }).parentElement!.parentElement!;
@@ -894,9 +899,13 @@ describe("expired inventory attention", () => {
 
     await waitFor(() => assert.equal(screen.getByTestId("stat-low-stock").textContent?.trim(), "1"));
     assert.equal(screen.getByTestId("stat-expiring").textContent?.trim(), "1");
-    assert.equal(screen.getByTestId("category-attention-dairy-total").textContent, "1");
-    assert.equal(screen.getByTestId("category-attention-dairy-low-count").textContent, "1");
-    assert.equal(screen.getByTestId("category-attention-dairy-expiring-count").textContent, "1");
+    assert.equal(screen.getByRole("link", { name: "View Total Items in inventory" }).getAttribute("href"), "/inventory");
+    assert.equal(screen.getByRole("link", { name: "View Low Stock in inventory" }).getAttribute("href"), "/inventory?stock=low");
+    assert.equal(screen.getByRole("link", { name: "View Out of Stock in inventory" }).getAttribute("href"), "/inventory?stock=out");
+    assert.equal(screen.getByRole("link", { name: "View Expiring Soon in inventory" }).getAttribute("href"), "/inventory?stock=expiring");
+    assert.equal(screen.getByRole("link", { name: "View Expired in inventory" }).getAttribute("href"), "/inventory?stock=expired");
+    assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Expiring Soon"), true);
+    assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Low Stock"), true);
 
     const bell = screen.getByTestId("notification-bell");
     fireEvent.click(bell);
@@ -1852,21 +1861,34 @@ describe("dashboard inventory attention refresh", () => {
     );
     assert.equal(screen.getByTestId("stat-expiring").textContent?.trim(), "1");
 
-    assert.ok(
-      (
-        await screen.findByTestId("category-attention-pantry")
-      ).textContent?.includes("1Out"),
-    );
-    assert.ok(
-      screen
-        .getByTestId("category-attention-produce")
-        .textContent?.includes("1Low"),
-    );
-    assert.ok(
-      screen
-        .getByTestId("category-attention-dairy")
-        .textContent?.includes("1Expiring"),
-    );
+    assert.ok((await screen.findByTestId("attention-item-1")).textContent?.includes("Out of Stock"));
+    assert.ok(screen.getByTestId("attention-item-2").textContent?.includes("Low Stock"));
+    assert.ok(screen.getByTestId("attention-item-3").textContent?.includes("Expiring Soon"));
+  });
+
+  it("shows initial attention loading without presenting a healthy pantry", async () => {
+    const api = new GroceryApiMock();
+    api.inventoryGetMode = "pending";
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("pantry-attention-loading");
+    assert.equal(screen.queryByTestId("attention-healthy"), null);
+    api.resolvePendingInventory?.();
+    await screen.findByText("Your pantry is in good shape.");
+  });
+
+  it("removes the obsolete attention headings and duplicate suggestion list", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    assert.equal(screen.queryByText("Pantry Attention by Category"), null);
+    assert.equal(screen.queryByText("Grocery Suggestions & Alerts"), null);
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 1);
+    assert.equal(screen.queryByTestId("grocery-suggestions-alerts"), null);
   });
 
   it("renders exact attention totals and Out, Low, and Expiring counts per category", async () => {
@@ -1883,34 +1905,9 @@ describe("dashboard inventory attention refresh", () => {
     globalThis.fetch = api.fetch;
     const { queryClient } = renderApp();
 
-    const expected = [
-      { category: "produce", attention: 3, out: 1, low: 1, expiring: 2 },
-      { category: "dairy", attention: 1, out: 0, low: 1, expiring: 1 },
-      { category: "bakery", attention: 1, out: 0, low: 0, expiring: 1 },
-    ];
-
-    for (const counts of expected) {
-      const categoryId = `category-attention-${counts.category}`;
-      await screen.findByTestId(categoryId);
-      assert.equal(
-        screen.getByTestId(`${categoryId}-total`).textContent,
-        String(counts.attention),
-      );
-      assert.equal(
-        screen.getByTestId(`${categoryId}-out-count`).textContent,
-        String(counts.out),
-      );
-      assert.equal(
-        screen.getByTestId(`${categoryId}-low-count`).textContent,
-        String(counts.low),
-      );
-      assert.equal(
-        screen.getByTestId(`${categoryId}-expiring-count`).textContent,
-        String(counts.expiring),
-      );
-    }
-
-    assert.equal(screen.queryByTestId("category-attention-canned-goods"), null);
+    for (const id of [1, 2, 3, 4, 6]) await screen.findByTestId(`attention-item-${id}`);
+    assert.equal(screen.queryByTestId("attention-item-5"), null);
+    assert.equal(screen.queryByTestId("attention-item-7"), null);
     assert.equal(screen.queryByText("Your pantry is in good shape."), null);
   });
 
@@ -1924,8 +1921,112 @@ describe("dashboard inventory attention refresh", () => {
     const { queryClient } = renderApp();
 
     await screen.findByText("Your pantry is in good shape.");
-    assert.equal(screen.queryByTestId("category-attention-pantry"), null);
-    assert.equal(screen.queryByTestId("category-attention-breakfast"), null);
+    assert.ok(screen.getByTestId("attention-healthy"));
+    assert.equal(screen.queryByTestId("attention-list"), null);
+  });
+
+  it("shows an inventory retry error instead of a healthy state", async () => {
+    const api = new GroceryApiMock();
+    api.inventoryGetMode = "error";
+    globalThis.fetch = api.fetch;
+    renderApp();
+    await screen.findByText("Needs attention could not be loaded.");
+    assert.equal(screen.queryByTestId("attention-healthy"), null);
+    assert.ok(screen.getByRole("button", { name: /Retry/ }));
+  });
+
+  it("keeps inventory attention rows when suggestions fail", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    const originalFetch = api.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.toString(), "http://localhost");
+      if (url.pathname === "/api/suggestions") return new Response("{}", { status: 503 });
+      return originalFetch(input, init);
+    };
+    renderApp();
+    await screen.findByTestId("attention-item-1");
+    await screen.findByText("Shopping suggestions could not be loaded.");
+    assert.equal(screen.queryByText("No grocery suggestions right now."), null);
+  });
+
+  it("keeps attention rows usable while suggestions are loading", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    const originalFetch = api.fetch;
+    let resolveSuggestions = () => {};
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.toString(), "http://localhost");
+      if (url.pathname === "/api/suggestions") {
+        return new Promise<Response>((resolve) => {
+          resolveSuggestions = () => resolve(originalFetch(input, init));
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    const reviewButton = screen.getByTestId("button-generate-shopping-list") as HTMLButtonElement;
+    assert.equal(reviewButton.disabled, true);
+    assert.ok(screen.getByTestId("attention-item-1"));
+    resolveSuggestions();
+    await waitFor(() => assert.equal(reviewButton.disabled, false));
+  });
+
+  it("returns from a filtered-empty category to all categories", async () => {
+    const api = new GroceryApiMock();
+    api.items = [
+      dashboardItem(1, "Shortage", "Pantry", 0, 1),
+      dashboardItem(2, "Healthy", "Bakery", 5, 1),
+    ];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-item-1");
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter attention by category" }), { target: { value: "Bakery" } });
+    await screen.findByText("No items in Bakery need attention");
+    fireEvent.click(screen.getByRole("button", { name: "Show all categories" }));
+    await screen.findByTestId("attention-item-1");
+    assert.equal(screen.queryByTestId("attention-filtered-empty"), null);
+  });
+
+  it("filters before truncation, expands the complete result, and collapses on category change", async () => {
+    const api = new GroceryApiMock();
+    api.items = [
+      ...Array.from({ length: 7 }, (_, index) => dashboardItem(index + 1, `Produce ${index + 1}`, "Produce", 0, 1)),
+      dashboardItem(8, "Pantry shortage", "Pantry", 1, 2),
+      dashboardItem(9, "Healthy staple", "Healthy", 5, 1),
+    ];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    await screen.findByTestId("attention-list");
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 6);
+    fireEvent.click(screen.getByRole("button", { name: "View all 8 items" }));
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 8);
+
+    const category = screen.getByRole("combobox", { name: "Filter attention by category" });
+    fireEvent.change(category, { target: { value: "Produce" } });
+    await waitFor(() => assert.equal(screen.getAllByTestId(/^attention-item-/).length, 6));
+    assert.ok(screen.getByRole("button", { name: "View all 7 items" }));
+    fireEvent.click(screen.getByRole("button", { name: "View all 7 items" }));
+    assert.equal(screen.getAllByTestId(/^attention-item-/).length, 7);
+    fireEvent.change(category, { target: { value: "Pantry" } });
+    await waitFor(() => assert.equal(screen.getAllByTestId(/^attention-item-/).length, 1));
+    assert.equal(screen.queryByRole("button", { name: "Show fewer" }), null);
+  });
+
+  it("renders one non-interactive row with a sibling item link and empty action slot", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Long custom-unit item", "A very long category", 0, 2)];
+    globalThis.fetch = api.fetch;
+    renderApp();
+
+    const row = await screen.findByTestId("attention-item-1");
+    assert.equal(row.querySelectorAll("a,button,input,select").length, 1);
+    assert.equal(row.querySelector("a")?.getAttribute("href"), "/inventory?item=1");
+    assert.equal(row.querySelector(".dashboard-attention-action-slot")?.querySelectorAll("*").length, 0);
   });
 
   it("generates a linked shopping list from low-stock suggestions and restocks it", async () => {
@@ -2021,22 +2122,20 @@ describe("dashboard inventory attention refresh", () => {
     assert.equal(generatedBody?.items[0]?.inventoryItemId, 1);
   });
 
-  it("hides cached category cards while inventory is being refreshed", async () => {
+  it("retains cached attention rows while inventory is being refreshed", async () => {
     const api = new GroceryApiMock();
     api.items = [dashboardItem(1, "Apples", "Produce", 0, 2)];
     globalThis.fetch = api.fetch;
     const { queryClient } = renderApp();
 
-    const categoryId = "category-attention-produce";
-    await screen.findByTestId(categoryId);
+    await screen.findByTestId("attention-item-1");
 
     api.inventoryGetMode = "pending";
     const refresh = queryClient.refetchQueries({
       queryKey: getListInventoryItemsQueryKey(),
       type: "active",
     });
-    await screen.findByTestId("pantry-attention-loading");
-    assert.equal(screen.queryByTestId(categoryId), null);
+    assert.ok(screen.getByTestId("attention-item-1"));
 
     await queryClient.cancelQueries({
       queryKey: getListInventoryItemsQueryKey(),
@@ -2044,14 +2143,13 @@ describe("dashboard inventory attention refresh", () => {
     await refresh;
   });
 
-  it("hides cached category cards when inventory refresh fails", async () => {
+  it("retains cached attention rows when inventory refresh fails", async () => {
     const api = new GroceryApiMock();
     api.items = [dashboardItem(1, "Apples", "Produce", 0, 2)];
     globalThis.fetch = api.fetch;
     const { queryClient } = renderApp();
 
-    const categoryId = "category-attention-produce";
-    await screen.findByTestId(categoryId);
+    await screen.findByTestId("attention-item-1");
     api.inventoryGetMode = "error";
 
     await queryClient.refetchQueries({
@@ -2060,15 +2158,12 @@ describe("dashboard inventory attention refresh", () => {
     });
 
     assert.ok(queryClient.getQueryData(getListInventoryItemsQueryKey()));
-    await screen.findByRole("alert");
-    assert.equal(screen.queryByTestId(categoryId), null);
-    assert.equal(
-      screen.getByText("Pantry attention could not be loaded.").textContent,
-      "Pantry attention could not be loaded.",
-    );
+    await screen.findByRole("status");
+    assert.ok(screen.getByTestId("attention-item-1"));
+    assert.ok(screen.getByText("Refresh failed; showing the latest attention items.", { exact: false }).textContent?.includes("Refresh failed; showing the latest attention items."));
   });
 
-  it("refreshes category counts after create, edit, shopping-list restock, and delete flows", async () => {
+  it("refreshes attention rows after create, edit, shopping-list restock, and delete flows", async () => {
     const api = new GroceryApiMock();
     globalThis.fetch = api.fetch;
     const { queryClient } = renderApp();
@@ -2088,10 +2183,8 @@ describe("dashboard inventory attention refresh", () => {
 
     await waitFor(() => assert.equal(api.items.length, 1));
     await openDashboard();
-    const grainsAttention = await screen.findByTestId(
-      "category-attention-grains",
-    );
-    assert.ok(grainsAttention.textContent?.includes("1Low"));
+    const grainsAttention = await screen.findByTestId("attention-item-1");
+    assert.ok(grainsAttention.textContent?.includes("Low Stock"));
     assert.equal(
       screen.getByTestId("stat-total-items").textContent?.includes("1"),
       true,
@@ -2113,9 +2206,8 @@ describe("dashboard inventory attention refresh", () => {
     });
 
     await openDashboard();
-    assert.equal(screen.queryByTestId("category-attention-grains"), null);
-    const pantryOut = await screen.findByTestId("category-attention-pantry");
-    assert.ok(pantryOut.textContent?.includes("1Out"));
+    const pantryOut = await screen.findByTestId("attention-item-1");
+    assert.ok(pantryOut.textContent?.includes("Out of Stock"));
     assert.equal(
       screen.getByTestId("stat-out-of-stock").textContent?.includes("1"),
       true,
@@ -2129,7 +2221,7 @@ describe("dashboard inventory attention refresh", () => {
     await waitFor(() => assert.equal(api.items[0]?.quantity, 4));
     await openDashboard();
     await screen.findByText("Your pantry is in good shape.");
-    assert.equal(screen.queryByTestId("category-attention-pantry"), null);
+    assert.equal(screen.queryByTestId("attention-item-1"), null);
 
     await openInventory();
     fireEvent.click(screen.getByTestId("button-edit-1"));
@@ -2147,7 +2239,7 @@ describe("dashboard inventory attention refresh", () => {
 
     await openDashboard();
     await screen.findByText("Your pantry is in good shape.");
-    assert.equal(screen.queryByTestId("category-attention-pantry"), null);
+    assert.equal(screen.queryByTestId("attention-item-1"), null);
 
     await openInventory();
     fireEvent.click(screen.getByTestId("button-delete-1"));

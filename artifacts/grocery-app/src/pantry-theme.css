@@ -1768,6 +1768,72 @@ body {
 .dashboard-attention-grid {
   gap: 12px;
 }
+.dashboard-attention-list {
+  display: grid;
+  gap: 10px;
+}
+.dashboard-attention-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  border: 1px solid #e4e9df;
+  border-radius: 11px;
+  background: #fffefa;
+  padding: 13px 15px;
+}
+.dashboard-attention-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 10px;
+  background: #edf2e8;
+  color: #6f8664;
+}
+.dashboard-attention-details {
+  min-width: 0;
+}
+.dashboard-attention-item-link {
+  overflow-wrap: anywhere;
+  color: #3e513e;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: #cbd8c2;
+  text-underline-offset: 3px;
+}
+.dashboard-attention-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-top: 5px;
+  color: #778275;
+  font-size: 12px;
+}
+.dashboard-attention-meta span {
+  overflow-wrap: anywhere;
+}
+.dashboard-attention-action-slot {
+  min-width: 24px;
+  min-height: 24px;
+}
+.dashboard-category-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #60705e;
+  font-size: 12px;
+  font-weight: 600;
+}
+.dashboard-category-select select {
+  min-height: 36px;
+  max-width: 220px;
+  border: 1px solid #d9e2d3;
+  border-radius: 8px;
+  background: #fffefa;
+  padding: 0 30px 0 10px;
+  color: #435541;
+}
 .dashboard-attention-card {
   min-height: 124px;
   border-color: #e4e9df;
@@ -1939,6 +2005,26 @@ body {
   .dashboard-panel-header,
   .dashboard-suggestions-header {
     padding: 20px 19px 14px;
+  }
+  .dashboard-attention-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: start;
+    padding: 12px;
+  }
+  .dashboard-attention-icon {
+    width: 34px;
+    height: 34px;
+  }
+  .dashboard-attention-action-slot {
+    display: none;
+  }
+  .dashboard-category-select {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .dashboard-category-select select {
+    max-width: none;
+    flex: 1;
   }
   .dashboard-panel-content,
   .dashboard-suggestions-content {
