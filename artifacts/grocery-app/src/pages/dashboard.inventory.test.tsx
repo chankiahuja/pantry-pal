@@ -894,6 +894,11 @@ describe("expired inventory attention", () => {
 
     await waitFor(() => assert.equal(screen.getByTestId("stat-low-stock").textContent?.trim(), "1"));
     assert.equal(screen.getByTestId("stat-expiring").textContent?.trim(), "1");
+    assert.equal(screen.getByRole("link", { name: "View Total Items in inventory" }).getAttribute("href"), "/inventory");
+    assert.equal(screen.getByRole("link", { name: "View Low Stock in inventory" }).getAttribute("href"), "/inventory?stock=low");
+    assert.equal(screen.getByRole("link", { name: "View Out of Stock in inventory" }).getAttribute("href"), "/inventory?stock=out");
+    assert.equal(screen.getByRole("link", { name: "View Expiring Soon in inventory" }).getAttribute("href"), "/inventory?stock=expiring");
+    assert.equal(screen.getByRole("link", { name: "View Expired in inventory" }).getAttribute("href"), "/inventory?stock=expired");
     assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Expiring Soon"), true);
     assert.equal(screen.getByTestId("attention-item-101").textContent?.includes("Low Stock"), true);
 
@@ -1888,6 +1893,31 @@ describe("dashboard inventory attention refresh", () => {
     await screen.findByText("Your pantry is in good shape.");
     assert.ok(screen.getByTestId("attention-healthy"));
     assert.equal(screen.queryByTestId("attention-list"), null);
+  });
+
+  it("shows an inventory retry error instead of a healthy state", async () => {
+    const api = new GroceryApiMock();
+    api.inventoryGetMode = "error";
+    globalThis.fetch = api.fetch;
+    renderApp();
+    await screen.findByText("Needs attention could not be loaded.");
+    assert.equal(screen.queryByTestId("attention-healthy"), null);
+    assert.ok(screen.getByRole("button", { name: /Retry/ }));
+  });
+
+  it("keeps inventory attention rows when suggestions fail", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(1, "Shortage", "Pantry", 0, 1)];
+    const originalFetch = api.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.toString(), "http://localhost");
+      if (url.pathname === "/api/suggestions") return new Response("{}", { status: 503 });
+      return originalFetch(input, init);
+    };
+    renderApp();
+    await screen.findByTestId("attention-item-1");
+    await screen.findByText("Shopping suggestions could not be loaded.");
+    assert.equal(screen.queryByText("No grocery suggestions right now."), null);
   });
 
   it("filters before truncation, expands the complete result, and collapses on category change", async () => {
