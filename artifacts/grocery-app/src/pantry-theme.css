@@ -1770,7 +1770,21 @@ body {
 }
 .dashboard-attention-list {
   display: grid;
+  container-type: inline-size;
   gap: 10px;
+}
+.dashboard-attention-status {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@container (max-width: 220px) {
+  .dashboard-attention-list .dashboard-attention-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboard-attention-row .dashboard-attention-action-slot {
+    grid-column: 1;
+  }
 }
 .dashboard-attention-row {
   display: grid;
@@ -2016,7 +2030,7 @@ body {
     height: 34px;
   }
   .dashboard-attention-action-slot {
-    display: none;
+    grid-column: 2;
   }
   .dashboard-category-select {
     width: 100%;
@@ -2024,6 +2038,7 @@ body {
   }
   .dashboard-category-select select {
     max-width: none;
+    min-width: 0;
     flex: 1;
   }
   .dashboard-panel-content,
