@@ -17,7 +17,6 @@ import {
   type NotificationAlert,
 } from "@/lib/notification-alerts";
 
-const STORAGE_KEY = "pantrypal-seen-notifications";
 const EMAIL_REMINDER_NOTE =
   "Expiry reminders by email are planned for a future release. Check your alerts here for now.";
 
@@ -75,7 +74,7 @@ export function NotificationCenter() {
   usePantryEvents();
   useUtcDate();
   const { account, demo } = useSessionAccess();
-  const storageKey = `${STORAGE_KEY}:${demo ? "demo" : account?.id ?? "anonymous"}`;
+  const storageKey = `pantrypal-seen-notifications:${demo ? "demo" : account?.id ?? "anonymous"}`;
   const [open, setOpen] = useState(false);
   const [seenState, setSeen] = useState(() => ({ key: storageKey, values: loadSeen(storageKey) }));
   const seen = seenState.key === storageKey ? seenState.values : loadSeen(storageKey);
