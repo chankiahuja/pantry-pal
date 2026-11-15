@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import React from "react";
 import { JSDOM } from "jsdom";
 import { MockPantryApi } from "../mocks/pantry-api";
@@ -36,17 +36,22 @@ const { memoryLocation } = await import("wouter/memory-location");
 const { act, cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
 const { NotificationCenter } = await import("./notification-center");
 const originalFetch = globalThis.fetch;
+const clients = new Set<InstanceType<typeof QueryClient>>();
 
 afterEach(() => {
   cleanup();
+  for (const client of clients) client.clear();
+  clients.clear();
   globalThis.fetch = originalFetch;
   localStorage.clear();
 });
+after(() => dom.window.close());
 async function renderNotifications(api: MockPantryApi | null, fetchOverride?: typeof fetch) {
   globalThis.fetch = fetchOverride ?? api!.fetch;
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   });
+  clients.add(client);
   const location = memoryLocation({ path: "/dashboard" });
   render(
     <QueryClientProvider client={client}>
@@ -80,15 +85,15 @@ describe("NotificationCenter", { concurrency: false }, () => {
   it("shows a numeric unread badge, then a persistent dot after opening", async () => {
     const api = new MockPantryApi();
     await renderNotifications(api);
-    const bell = await screen.findByTestId("notification-bell");
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /unread/));
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: \d+ unread;/));
     assert.ok(bell.querySelector("span"));
 
     fireEvent.click(bell);
     await screen.findByTestId("notification-panel");
     assert.ok(screen.getByText("Olive oil"));
     assert.ok(screen.getByText(/items need attention/));
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
     assert.equal(bell.querySelector("span")?.textContent, "");
   });
 
@@ -96,7 +101,7 @@ describe("NotificationCenter", { concurrency: false }, () => {
     const api = new MockPantryApi();
     api.state.inventory = [api.state.inventory.find((item) => item.name === "Milk")!];
     await renderNotifications(api);
-    const singularBell = await screen.findByTestId("notification-bell");
+    const singularBell = await screen.findByRole("button", { name: /^Notifications:/ });
     await waitFor(() => assert.equal(
       singularBell.getAttribute("aria-label"),
       "Notifications: 1 unread; 1 item needs attention",
@@ -114,7 +119,7 @@ describe("NotificationCenter", { concurrency: false }, () => {
       { ...api.state.inventory[0], id: 101, name: "Second milk" },
     ];
     await renderNotifications(api);
-    const pluralBell = await screen.findByTestId("notification-bell");
+    const pluralBell = await screen.findByRole("button", { name: /^Notifications:/ });
     await waitFor(() => assert.equal(
       pluralBell.getAttribute("aria-label"),
       "Notifications: 1 unread; 2 items need attention",
@@ -126,37 +131,48 @@ describe("NotificationCenter", { concurrency: false }, () => {
   it("retains read state across remounts and makes new identities unread", async () => {
     const api = new MockPantryApi();
     await openNotifications(api);
-    const bell = screen.getByTestId("notification-bell");
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
     cleanup();
 
     await renderNotifications(api);
-    const remountedBell = await screen.findByTestId("notification-bell");
-    await waitFor(() => assert.match(remountedBell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    const remountedBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(remountedBell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
 
     api.state.inventory[0] = { ...api.state.inventory[0], quantity: 1, minThreshold: 2 };
     cleanup();
     await renderNotifications(api);
-    const changedBell = await screen.findByTestId("notification-bell");
-    await waitFor(() => assert.match(changedBell.getAttribute("aria-label") ?? "", /unread/));
+    const changedBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(changedBell.getAttribute("aria-label") ?? "", /^Notifications: \d+ unread;/));
   });
 
   it("does not make an unchanged refetch unread again and makes a recurrence unread", async () => {
     const api = new MockPantryApi();
-    api.state.inventory = [api.state.inventory.find((item) => item.name === "Milk")!];
+    const recurringItem = api.state.inventory.find((item) => item.name === "Milk")!;
+    api.state.inventory = [recurringItem];
     const { client } = await openNotifications(api);
-    const bell = screen.getByTestId("notification-bell");
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
 
     await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
 
     api.state.inventory = [];
     await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
     await screen.findByText("All caught up!");
-    api.state.inventory = [api.state.inventory.find(() => false) ?? { ...new MockPantryApi().state.inventory[0] }];
+    fireEvent.click(screen.getByRole("button", { name: "Close notifications" }));
+    api.state.inventory = [recurringItem];
     await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /unread/));
+    await waitFor(() => assert.equal(
+      bell.getAttribute("aria-label"),
+      "Notifications: 1 unread; 1 item needs attention",
+    ));
+    fireEvent.click(bell);
+    await screen.findByText("Milk");
+    await waitFor(() => assert.equal(
+      bell.getAttribute("aria-label"),
+      "Notifications: no unread alerts; 1 item needs attention",
+    ));
   });
 
   it("updates unresolved totals as conditions resolve, retaining then removing the dot", async () => {
@@ -166,12 +182,12 @@ describe("NotificationCenter", { concurrency: false }, () => {
       { ...api.state.inventory.find((item) => item.name === "Milk")!, id: 102, name: "Second milk" },
     ];
     const { client } = await openNotifications(api);
-    const bell = screen.getByTestId("notification-bell");
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
     await screen.findByText("2 items need attention");
     api.state.inventory = [api.state.inventory[0]];
     await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
     await waitFor(() => assert.ok(screen.getByText("1 item needs attention")));
-    assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/);
+    assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/);
     assert.ok(bell.querySelector("span"));
     api.state.inventory = [];
     await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
@@ -214,18 +230,23 @@ describe("NotificationCenter", { concurrency: false }, () => {
     healthy.state.inventory = [];
     await openNotifications(healthy);
     assert.ok(await screen.findByText("All caught up!"));
-    assert.equal(screen.getByTestId("notification-bell").getAttribute("aria-label"), "Notifications: no items need attention");
+    const healthyBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    assert.equal(healthyBell.getAttribute("aria-label"), "Notifications: no items need attention");
     cleanup();
 
     const pending = new Promise<Response>(() => {});
     await renderNotifications(null, async () => pending);
-    fireEvent.click(screen.getByTestId("notification-bell"));
+    const loadingBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    assert.equal(loadingBell.getAttribute("aria-label"), "Notifications: loading alerts");
+    fireEvent.click(loadingBell);
     assert.ok(screen.getByRole("status", { name: "Loading alerts" }));
 
     cleanup();
     await renderNotifications(null, async () => new Response("failed", { status: 503 }));
-    fireEvent.click(screen.getByTestId("notification-bell"));
+    const errorBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    fireEvent.click(errorBell);
     assert.ok(await screen.findByRole("alert"));
+    assert.equal(errorBell.getAttribute("aria-label"), "Notifications: alerts unavailable");
     assert.equal(screen.queryByText("All caught up!"), null);
   });
 
@@ -261,14 +282,15 @@ describe("NotificationCenter", { concurrency: false }, () => {
     assert.deepEqual(JSON.parse(localStorage.getItem(storageKey(false))!), [marker]);
     failed = false;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await waitFor(() => assert.match(screen.getByTestId("notification-bell").getAttribute("aria-label") ?? "", /no unread alerts/));
+    const retryBell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(retryBell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
   });
 
   it("keeps rows and counts available for background refresh errors", async () => {
     const api = new MockPantryApi();
     let failed = false;
     const fetchOverride: typeof fetch = async (input, init) => {
-      if (failed && String(input).includes("/api/suggestions")) return new Response("failed", { status: 503 });
+      if (failed) return new Response("failed", { status: 503 });
       return api.fetch(input, init);
     };
     const { client } = await renderNotifications(null, fetchOverride);
@@ -282,34 +304,74 @@ describe("NotificationCenter", { concurrency: false }, () => {
     assert.ok(screen.getByText(/could not be refreshed/));
   });
 
+  it("retains a successful empty snapshot during a failed background refresh", async () => {
+    const api = new MockPantryApi();
+    api.state.inventory = [];
+    let failed = false;
+    const fetchOverride: typeof fetch = async (input, init) => {
+      if (failed) return new Response("failed", { status: 503 });
+      return api.fetch(input, init);
+    };
+    const { client } = await renderNotifications(null, fetchOverride);
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
+    fireEvent.click(bell);
+    await screen.findByText("All caught up!");
+    assert.equal(bell.getAttribute("aria-label"), "Notifications: no items need attention");
+    assert.equal(bell.querySelector("span"), null);
+    assert.deepEqual(client.getQueryData(getGetGrocerySuggestionsQueryKey()), []);
+
+    failed = true;
+    await client.refetchQueries({ queryKey: getGetGrocerySuggestionsQueryKey() });
+    assert.match((await screen.findByRole("alert")).textContent ?? "", /could not be refreshed/);
+    assert.ok(screen.getByRole("button", { name: "Try again" }));
+    assert.ok(screen.getByText("No alerts at the last successful check."));
+    assert.ok(screen.getByText("Current alerts could not be verified. Try again to check."));
+    assert.equal(screen.queryByText("All caught up!"), null);
+    assert.equal(screen.queryByText("No low stock or expiry alerts right now."), null);
+    assert.deepEqual(client.getQueryData(getGetGrocerySuggestionsQueryKey()), []);
+    assert.equal(bell.querySelector("span"), null);
+    assert.equal(
+      bell.getAttribute("aria-label"),
+      "Notifications: current alerts unavailable; last successful check had no alerts",
+    );
+
+    failed = false;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("All caught up!");
+    assert.equal(screen.queryByRole("button", { name: "Try again" }), null);
+    assert.ok(screen.getByText("All caught up!"));
+    assert.equal(bell.getAttribute("aria-label"), "Notifications: no items need attention");
+  });
+
   it("keeps close, Escape, links, and accessible state labels working", async () => {
     const api = new MockPantryApi();
     await openNotifications(api);
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
     const close = screen.getByRole("button", { name: "Close notifications" });
     fireEvent.click(close);
     assert.equal(screen.queryByTestId("notification-panel"), null);
-    assert.equal(document.activeElement, screen.getByTestId("notification-bell"));
+    assert.equal(document.activeElement, bell);
 
-    fireEvent.click(screen.getByTestId("notification-bell"));
-    await waitFor(() => assert.match(screen.getByTestId("notification-bell").getAttribute("aria-label") ?? "", /no unread alerts/));
+    fireEvent.click(bell);
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
     assert.ok(screen.getByRole("link", { name: "Olive oil" }).getAttribute("href")?.includes("item=9"));
     fireEvent.keyDown(document, { key: "Escape" });
     assert.equal(screen.queryByTestId("notification-panel"), null);
-    assert.equal(document.activeElement, screen.getByTestId("notification-bell"));
+    assert.equal(document.activeElement, bell);
   });
 
   it("keeps current-session behaviour when localStorage is corrupt or write-blocked", async () => {
     localStorage.setItem(storageKey(false), "not-json");
     const api = new MockPantryApi();
     await renderNotifications(api);
-    const bell = await screen.findByTestId("notification-bell");
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /unread/));
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: \d+ unread;/));
 
     const originalSetItem = localStorage.setItem.bind(localStorage);
     Object.defineProperty(localStorage, "setItem", { configurable: true, value: () => { throw new Error("blocked"); } });
     fireEvent.click(bell);
     await screen.findByText("Olive oil");
-    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /no unread alerts/));
+    await waitFor(() => assert.match(bell.getAttribute("aria-label") ?? "", /^Notifications: no unread alerts;/));
     Object.defineProperty(localStorage, "setItem", { configurable: true, value: originalSetItem });
   });
 
@@ -322,7 +384,7 @@ describe("NotificationCenter", { concurrency: false }, () => {
       quantity: 0,
     }));
     await renderNotifications(api);
-    const bell = await screen.findByTestId("notification-bell");
+    const bell = await screen.findByRole("button", { name: /^Notifications:/ });
     await waitFor(() => assert.equal(bell.getAttribute("aria-label"), "Notifications: 10 unread; 10 items need attention"));
     assert.equal(bell.textContent?.includes("9+"), true);
   });

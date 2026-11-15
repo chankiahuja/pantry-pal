@@ -157,9 +157,11 @@ export function NotificationCenter() {
     ? "Notifications: loading alerts"
     : initialError
       ? "Notifications: alerts unavailable"
-      : unresolvedCount === 0
-        ? "Notifications: no items need attention"
-        : `Notifications: ${unreadCount > 0 ? `${unreadCount} unread` : "no unread alerts"}; ${attentionCopy}`;
+      : backgroundError && unresolvedCount === 0
+        ? "Notifications: current alerts unavailable; last successful check had no alerts"
+        : unresolvedCount === 0
+          ? "Notifications: no items need attention"
+          : `Notifications: ${unreadCount > 0 ? `${unreadCount} unread` : "no unread alerts"}; ${attentionCopy}`;
 
   return (
     <div className="relative">
@@ -230,12 +232,6 @@ export function NotificationCenter() {
                 <p>Alerts could not be loaded.</p>
                 <button type="button" className="mt-2 underline underline-offset-4" onClick={() => void refetch()}>Try again</button>
               </div>
-            ) : unresolvedCount === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-10 text-center px-4">
-                <CheckCheck className="h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
-                <p className="text-sm font-medium text-foreground">All caught up!</p>
-                <p className="text-xs text-muted-foreground">No low stock or expiry alerts right now.</p>
-              </div>
             ) : (
               <>
                 {backgroundError && (
@@ -244,7 +240,13 @@ export function NotificationCenter() {
                     <button type="button" className="ml-1 underline underline-offset-4" onClick={() => void refetch()}>Try again</button>
                   </div>
                 )}
-                {grouped.map(({ urgency, items }) => {
+                {unresolvedCount === 0 ? (
+                  <div className="flex flex-col items-center gap-2 py-10 text-center px-4">
+                    <CheckCheck className="h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
+                    <p className="text-sm font-medium text-foreground">{backgroundError ? "No alerts at the last successful check." : "All caught up!"}</p>
+                    <p className="text-xs text-muted-foreground">{backgroundError ? "Current alerts could not be verified. Try again to check." : "No low stock or expiry alerts right now."}</p>
+                  </div>
+                ) : grouped.map(({ urgency, items }) => {
                   const cfg = URGENCY_CONFIG[urgency];
                   const Icon = cfg.icon;
                   return (
