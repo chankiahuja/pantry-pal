@@ -95,15 +95,31 @@ describe("NotificationCenter", { concurrency: false }, () => {
   it("uses singular and plural unresolved-count copy", async () => {
     const api = new MockPantryApi();
     api.state.inventory = [api.state.inventory.find((item) => item.name === "Milk")!];
-    await openNotifications(api);
+    await renderNotifications(api);
+    const singularBell = await screen.findByTestId("notification-bell");
+    await waitFor(() => assert.equal(
+      singularBell.getAttribute("aria-label"),
+      "Notifications: 1 unread; 1 item needs attention",
+    ));
+    fireEvent.click(singularBell);
     assert.ok(await screen.findByText("1 item needs attention"));
+    await waitFor(() => assert.equal(
+      singularBell.getAttribute("aria-label"),
+      "Notifications: no unread alerts; 1 item needs attention",
+    ));
 
     cleanup();
     api.state.inventory = [
       api.state.inventory[0],
       { ...api.state.inventory[0], id: 101, name: "Second milk" },
     ];
-    await openNotifications(api);
+    await renderNotifications(api);
+    const pluralBell = await screen.findByTestId("notification-bell");
+    await waitFor(() => assert.equal(
+      pluralBell.getAttribute("aria-label"),
+      "Notifications: 1 unread; 2 items need attention",
+    ));
+    fireEvent.click(pluralBell);
     assert.ok(await screen.findByText("2 items need attention"));
   });
 

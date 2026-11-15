@@ -150,13 +150,16 @@ export function NotificationCenter() {
     { urgency: "low" as const, items: alerts.filter(({ item }) => item.urgency === "low") },
   ].filter((group) => group.items.length > 0);
 
+  const attentionCopy = unresolvedCount === 1
+    ? "1 item needs attention"
+    : `${unresolvedCount} items need attention`;
   const label = initialLoading
     ? "Notifications: loading alerts"
     : initialError
       ? "Notifications: alerts unavailable"
       : unresolvedCount === 0
         ? "Notifications: no items need attention"
-        : `Notifications: ${unreadCount > 0 ? `${unreadCount} unread` : "no unread alerts"}; ${unresolvedCount} ${unresolvedCount === 1 ? "item" : "items"} need attention`;
+        : `Notifications: ${unreadCount > 0 ? `${unreadCount} unread` : "no unread alerts"}; ${attentionCopy}`;
 
   return (
     <div className="relative">
@@ -202,7 +205,7 @@ export function NotificationCenter() {
               <span className="font-semibold text-sm text-foreground">Notifications</span>
               {hasSnapshot && unresolvedCount > 0 && (
                 <span className="text-xs text-muted-foreground">
-                  {unresolvedCount} {unresolvedCount === 1 ? "item needs" : "items need"} attention
+                  {attentionCopy}
                 </span>
               )}
             </div>
