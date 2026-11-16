@@ -6,47 +6,49 @@ Account deletion is documented in the [data inventory and deletion protocol](GS-
 
 PantryPal is a React application backed by one Spring Boot service and a relational database. Spring Boot serves both the built frontend and the API on port 8080. The diagram below shows the normal full-stack runtime.
 
+The overview is divided into three smaller diagrams. Solid arrows are synchronous requests or dependencies; dashed arrows represent background refresh signals.
+
+### Request and storage path
+
 ```mermaid
-flowchart TB
-    User["User"]
-
-    subgraph Browser["Browser: React and TypeScript"]
-        Screens["Dashboard, inventory, shopping lists and Contact & Feedback"]
-        Feedback["Consume / Restock dialogs and Undo feedback"]
-        Queries["Generated API client and React Query cache"]
-        Bell["Notification bell"]
-        Stream["EventSource connection"]
-        Screens --> Queries
-        Screens --> Feedback --> Queries
-        Bell -->|"Read suggestions; poll every 30 seconds"| Queries
-        Stream -->|Invalidate queries| Queries
-    end
-
-    subgraph Spring["Spring Boot: port 8080"]
-        Static["React static assets and page-route fallback"]
-        Controller["REST controllers: /api"]
-        Service["PantryService: validation, suggestions and transactions"]
-        Auth["AuthService: email OTP, accounts and sessions"]
-        Repo["PantryRepository: parameterized JDBC queries"]
-        Events["NotificationEvents: after-commit listener"]
-        Scheduler["Scheduled stock and expiry check"]
-        Controller --> Service --> Repo
-        Controller --> Auth --> Repo
-        Service -.->|"PantryChanged; delivered after commit"| Events
-        Scheduler -->|Read current suggestions| Service
-        Scheduler -->|Alert changes or heartbeat| Events
-    end
-
-    DB[("H2 file locally OR PostgreSQL with postgres profile")]
-    Flyway["Flyway schema migrations"]
-    User --> Screens
-    Static -->|HTML, JavaScript and CSS| Screens
-    Queries -->|HTTP requests| Controller
-    Controller -->|JSON responses| Queries
-    Repo --> DB
-    Flyway --> DB
-    Events -->|SSE: /api/notifications/stream| Stream
+flowchart LR
+    User["User"] --> UI["React UI"]
+    UI <-->|"HTTP / JSON"| API["Spring Boot REST API"]
+    API --> Core["Pantry and auth services"]
+    Core --> Repo["JDBC repository"]
+    Repo <--> DB[("H2 (local) / PostgreSQL")]
+    Flyway["Flyway migrations"] --> DB
+    Static["Spring serves built React assets"] -.-> UI
 ```
+
+The Spring Boot server hosts the built React app and the `/api` endpoints on port 8080. H2 is used locally unless the PostgreSQL profile is configured.
+
+### Browser interactions
+
+```mermaid
+flowchart LR
+    Screens["Dashboard / Inventory / Shopping"] --> Cache["Generated API client and React Query"]
+    Dialogs["Consume / Restock / Undo"] --> Cache
+    Bell["Notification bell"] -->|"Suggestions poll: 30 s"| Cache
+    Stream["EventSource (SSE)"] -.->|"Invalidate queries"| Cache
+    Cache <-->|"HTTP / JSON"| API["Spring REST controllers"]
+```
+
+### Notifications and background checks
+
+```mermaid
+flowchart LR
+    Writes["Committed pantry changes"] -.-> Listener["After-commit event listener"]
+    Schedule["Stock / expiry scheduler"] --> Service["Pantry suggestions"]
+    Service -.-> Listener
+    Listener -.->|"SSE refresh signal"| Browser["Browser EventSource"]
+    Browser -.-> Refresh["React Query refetch"]
+    Refresh -->|"Fetch current alerts"| API["Suggestions API"]
+```
+
+SSE sends refresh signals, not alert details. Notification delivery is best effort; normal HTTP responses and the bell's 30-second polling provide additional refresh paths. There is no message broker or durable notification inbox.
+
+
 
 The server owns validation, authenticated sessions and committed stock. React Query caches server responses and refetches dependent views after changes. SSE carries refresh signals; the notification bell recovers its alert contents from the suggestions API. There is no message broker or durable notification inbox. The public Contact & Feedback page and signed-in quick-feedback dialog use a CSRF-protected API; submissions are validated, rate limited and sent to the environment-configured support mailbox without being persisted or logged. The address and any response-time note are environment-configured; absent details are not invented. A success response means the SMTP transport accepted the message.
 
@@ -56,72 +58,102 @@ React routes load on demand through dynamic imports. The session gate runs befor
 
 ## Pantry and shopping workflow
 
+The inventory adjustment and shopping-list lifecycles are shown separately to avoid crossing arrows and repeated loops.
+
+### Inventory adjustment and Undo
+
 ```mermaid
 flowchart TD
-    Open["Open application"] --> Login["Email OTP and database-backed session"]
-    Login --> Dashboard["Dashboard: quantities, stock and expiry attention"]
-    Dashboard --> Inventory["Inventory: add, edit or delete items"]
-    Inventory --> Adjust["Consume or Restock: enter amount in item units"]
-    Adjust --> Validate{"Valid amount and enough stock?"}
-    Validate -->|No| Error["Show validation error"]
-    Error --> Adjust
-    Validate -->|Yes| Commit["Commit atomic adjustment with retry key"]
-    Commit --> Feedback["Show confirmed quantity and bounded Undo"]
-    Feedback --> Undo{"User chooses Undo?"}
-    Undo -->|Yes| Eligible{"Within five minutes and no intervening write?"}
-    Eligible -->|Yes| Restore["Restore prior quantity once, transactionally"]
-    Eligible -->|No| Rejected["Explain expiry or conflict; keep newer stock"]
-
-    Dashboard --> Suggestions["Attention: expired, out of stock, low stock or expiring soon"]
-    Suggestions --> Review["Review shopping quantities; exclude expiry-only reminders"]
-    Review --> Confirm{"Confirm selected items?"}
-    Confirm -->|No| Dashboard
-    Confirm -->|Yes| List["Create shopping list transactionally"]
-    List --> Purchased["Mark bought items and complete purchase"]
-    Purchased --> Restock["Restock linked purchased rows once in one transaction"]
-
-    Commit --> Refresh["Refresh inventory, dashboard, suggestions and notifications"]
+    Edit["Consume or Restock"] --> Valid{"Valid amount and stock?"}
+    Valid -->|No| Error["Show validation error"]
+    Valid -->|Yes| Save["Atomic adjustment with retry key"]
+    Save --> Confirm["Show new quantity and Undo"]
+    Confirm --> Undo{"Undo requested?"}
+    Undo -->|Yes| Check{"Within 5 min and no later write?"}
+    Check -->|Yes| Restore["Restore previous quantity once"]
+    Check -->|No| Conflict["Explain expiry or conflict"]
+    Save -.-> Refresh["Refresh dependent views"]
     Restore --> Refresh
-    Restock --> Refresh
-    Refresh --> Dashboard
 ```
+
+An error keeps the user in the adjustment dialog. The server determines Undo eligibility; expiry or an intervening write never overwrites newer stock.
+
+### Suggestions to completed purchase
+
+```mermaid
+flowchart TD
+    Dashboard["Dashboard attention"] --> Review["Review suggested quantities"]
+    Review --> Pick{"Confirm selected stock items?"}
+    Pick -->|No| Dashboard
+    Pick -->|Yes| List["Create shopping list"]
+    List --> Buy["Mark items bought"]
+    Buy --> Complete["Complete purchase"]
+    Complete --> Restock["Restock linked inventory rows once"]
+    Restock --> Refresh["Refresh inventory and dashboard"]
+```
+
+Only out-of-stock and low-stock suggestions can generate shopping items; expiry-only reminders are excluded. Manual shopping rows without linked inventory are not automatically restocked.
+
+
 
 Normal login/signup uses server-verified email codes and database-backed sessions; email is the only offered method by default, and browser-only mock authentication remains a preview. Household authorization remains separate work. Shopping-list generation revalidates selected items against current stock on the server. Purchase completion leaves unlinked manual shopping items out of inventory.
 
 ## Adjustment transaction and refresh sequence
 
+The main transaction and the retry outcomes are split so each sequence remains readable.
+
+### Successful adjustment and refresh
+
 ```mermaid
 sequenceDiagram
     actor User
-    participant UI as React UI and query cache
-    participant API as Spring controller and service
+    participant UI as React UI
+    participant API as Spring API
     participant DB as Database
-    participant Events as After-commit listener
+    participant SSE as Event listener
 
-    User->>UI: Consume or Restock an amount
-    UI->>API: POST adjustment with Idempotency-Key
-    API->>DB: Begin transaction and lock inventory row
-    API->>API: Validate operation, amount and stock
-    API->>DB: Look up item-scoped request key
+    User->>UI: Consume / Restock
+    UI->>API: POST adjustment (Idempotency-Key)
+    API->>DB: Lock row; validate and record adjustment
+    DB-->>API: Transaction committed
+    API-->>UI: Confirmed inventory
+    API-)SSE: After-commit PantryChanged
+    SSE--)UI: SSE inventory_changed signal
+    UI->>UI: Refetch dependent queries; show Undo
+```
+
+The HTTP response and SSE signal can arrive in either order. The UI refreshes from the response even if SSE is unavailable; the notification bell also polls suggestions.
+
+### Idempotency and failure handling
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI
+    participant API as Spring API
+    participant DB as Database
+
+    UI->>API: POST adjustment + request key
+    API->>DB: Lock item; inspect existing key
     alt Identical retry
         DB-->>API: Existing adjustment
-        API->>DB: Read current inventory, finish without another write
-        API-->>UI: Current inventory, no duplicate adjustment
-    else Key reused with another payload
-        API-->>UI: Reject request without changing stock
-    else New valid adjustment
-        API->>DB: Update quantity and revision, save history and Undo expiry
-        API->>API: Publish transaction-bound PantryChanged event
-        API->>DB: Commit stock and history together
-        API->>Events: Deliver event after successful commit
-        Events-->>UI: SSE inventory_changed refresh signal
-        API-->>UI: Confirmed inventory response
-        UI->>UI: Refresh dependent queries and show Undo
+        API-->>UI: Current inventory; no second write
+    else Key reused with different payload
+        API-->>UI: Reject; stock unchanged
+    else New adjustment
+        API->>DB: Validate, update quantity / revision, save history
+        alt Transaction commits
+            DB-->>API: Committed
+            API-->>UI: Confirmed inventory
+        else Transaction rolls back
+            DB-->>API: Rolled back
+            API-->>UI: Error; stock and history unchanged
+        end
     end
-
-    Note over UI,Events: Response refresh works without SSE, the bell also polls suggestions
-    Note over API,DB: Rollback preserves stock/history and suppresses the transaction event
 ```
+
+The after-commit listener only publishes refresh signals for committed changes. Undo runs as its own transaction with row locking, expiry and revision checks.
+
+
 
 Undo is a separate transaction using the original adjustment key. It locks the inventory row, checks expiry and revision, and commits the restored quantity and used marker together. A successful retry reports `already_undone` without applying another change. The SSE signal and HTTP response are separate refresh paths; clients must not depend on their arrival order.
 
