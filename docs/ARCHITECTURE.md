@@ -114,12 +114,12 @@ sequenceDiagram
 
     User->>UI: Consume / Restock
     UI->>API: POST adjustment (Idempotency-Key)
-    API->>DB: Lock row; validate and record adjustment
+    API->>DB: Lock row, validate and record adjustment
     DB-->>API: Transaction committed
     API-->>UI: Confirmed inventory
     API-->>SSE: After-commit PantryChanged
     SSE-->>UI: SSE inventory_changed signal
-    UI->>UI: Refetch dependent queries; show Undo
+    UI->>UI: Refetch dependent queries, show Undo
 ```
 
 The HTTP response and SSE signal can arrive in either order. The UI refreshes from the response even if SSE is unavailable; the notification bell also polls suggestions.
@@ -133,12 +133,12 @@ sequenceDiagram
     participant DB as Database
 
     UI->>API: POST adjustment + request key
-    API->>DB: Lock item; inspect existing key
+    API->>DB: Lock item, inspect existing key
     alt Identical retry
         DB-->>API: Existing adjustment
-        API-->>UI: Current inventory; no second write
+        API-->>UI: Current inventory, no second write
     else Key reused with different payload
-        API-->>UI: Reject; stock unchanged
+        API-->>UI: Reject, stock unchanged
     else New adjustment
         API->>DB: Validate, update quantity / revision, save history
         alt Transaction commits
@@ -146,7 +146,7 @@ sequenceDiagram
             API-->>UI: Confirmed inventory
         else Transaction rolls back
             DB-->>API: Rolled back
-            API-->>UI: Error; stock and history unchanged
+            API-->>UI: Error, stock and history unchanged
         end
     end
 ```
