@@ -16,7 +16,7 @@ dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { Router } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
-const { getInventoryStats, setCsrfToken } = await import("@workspace/api-client-react");
+const { getInventoryStats, getGetInventoryStatsQueryKey, setCsrfToken } = await import("@workspace/api-client-react");
 const { act, cleanup, fireEvent, render, screen, waitFor, within } = await import("@testing-library/react");
 const { AppRoutes } = await import("../App");
 const { LoginGate, useSessionAccess } = await import("../lib/preview-access");
@@ -575,10 +575,15 @@ describe("real email authentication", { concurrency: false }, () => {
       const wasCurrent = interveningScope();
       const cached = { owner: transition };
       client.setQueryData(["transition-cache"], cached);
+      client.setQueryData(getGetInventoryStatsQueryKey(), cached);
+      const cacheEvents: string[] = [];
+      const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
       await act(async () => { rejectLogouts[0]!(failure); await firstResult; });
       assert.equal(previousScope(), false);
       assert.equal(interveningScope(), wasCurrent);
       assert.equal(client.getQueryData(["transition-cache"]), cached);
+      assert.deepEqual(cacheEvents, []);
+      unsubscribe();
       if (transition === "account switch") assert.equal(access.account?.id, 2);
       if (transition === "another pending logout") {
         await act(async () => { rejectLogouts[1]!(secondFailure); await secondResult; });

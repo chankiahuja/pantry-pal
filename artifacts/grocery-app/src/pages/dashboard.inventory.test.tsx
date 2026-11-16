@@ -62,6 +62,7 @@ const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query
 const { Route, Router, Switch } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
 const {
+  getInventoryItem,
   getGetInventoryItemQueryKey,
   getGetGrocerySuggestionsQueryKey,
   getGetInventoryStatsQueryKey,
@@ -1213,15 +1214,21 @@ describe("dashboard attention editing", () => {
     assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Second account milk"));
   });
 
-  it("refreshes a successful edit after logout is rejected and the account stays signed in", async () => {
+  for (const patchFirst of [true, false]) {
+  it(`refreshes a dismissed save when PATCH ${patchFirst ? "resolves before" : "resolves after"} logout rejects`, async () => {
     const api = new GroceryApiMock();
     api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
     const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
     let logout!: () => Promise<void>;
+    let rejectLogout!: (error: Error) => void;
+    const logoutError = new TypeError("Logout connection failed");
+    let logoutResult!: Promise<void>;
+    const requests: string[] = [];
     let toastTitles: unknown[] = [];
     globalThis.fetch = async (input, init) => {
+      requests.push(`${init?.method ?? "GET"} ${new URL(String(input), "http://localhost").pathname}`);
       if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
-      if (String(input).endsWith("/api/auth/logout")) return new Response(JSON.stringify({ error: "Unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } });
+      if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>((_resolve, reject) => { rejectLogout = reject; });
       return api.fetch(input, init);
     };
     function AccountHarness() {
@@ -1233,20 +1240,33 @@ describe("dashboard attention editing", () => {
     const location = memoryLocation({ path: "/dashboard" });
     render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><AccountHarness /></LoginGate></Router></QueryClientProvider>);
     await screen.findByRole("button", { name: "Edit Milk" }, { timeout: 5000 });
+    await act(async () => { await client.fetchQuery({ queryKey: getGetInventoryItemQueryKey(101), queryFn: () => getInventoryItem(101) }); });
     await edit();
     api.inventoryPatchMode = "pending";
     changeInput("input-item-quantity", "0");
     fireEvent.click(screen.getByTestId("button-save-item"));
     await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
     fireEvent.click(screen.getByTestId("button-cancel"));
-    await act(async () => { await assert.rejects(logout()); });
-    assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
+    await act(async () => { logoutResult = assert.rejects(logout(), error => error === logoutError); });
     const beforeToasts = [...toastTitles];
+    const beforeRequests = requests.length;
     const invalidated: unknown[] = [];
+    const cacheEvents: string[] = [];
     const unsubscribe = client.getQueryCache().subscribe((event) => {
+      cacheEvents.push(event.type);
       if (event.type === "updated" && event.action.type === "invalidate") invalidated.push(event.query.queryKey);
     });
-    await act(async () => { api.resolveInventoryPatch?.(); });
+    if (patchFirst) {
+      await act(async () => { api.resolveInventoryPatch?.(); });
+      assert.equal(api.items[0]!.quantity, 0);
+      assert.deepEqual(cacheEvents, []);
+      assert.equal((client.getQueryData(getGetInventoryItemQueryKey(101)) as InventoryItem).quantity, 1);
+      assert.equal((client.getQueryData(getListInventoryItemsQueryKey()) as InventoryItem[])[0]!.quantity, 1);
+      assert.equal(screen.getByTestId("stat-low-stock").textContent, "1");
+    }
+    await act(async () => { rejectLogout(logoutError); await logoutResult; });
+    assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
+    if (!patchFirst) await act(async () => { api.resolveInventoryPatch?.(); });
     await waitFor(() => {
       for (const key of [getListInventoryItemsQueryKey(), getGetInventoryStatsQueryKey(), getGetGrocerySuggestionsQueryKey(), getGetInventoryItemQueryKey(101)]) {
         assert.ok(invalidated.some((value) => JSON.stringify(value) === JSON.stringify(key)), JSON.stringify(key));
@@ -1256,6 +1276,7 @@ describe("dashboard attention editing", () => {
       assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), api.items);
       assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
       assert.equal(screen.getByTestId("stat-out-of-stock").textContent, "1");
+      for (const path of ["/api/inventory", "/api/inventory/stats", "/api/suggestions", "/api/inventory/101"]) assert.ok(requests.slice(beforeRequests).includes(`GET ${path}`), path);
     });
     unsubscribe();
     assert.deepEqual(toastTitles, beforeToasts);
@@ -1272,6 +1293,68 @@ describe("dashboard attention editing", () => {
       assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
       assert.ok(toastTitles.includes("Milk updated."));
     });
+  });
+  }
+
+  it("blocks a save started during pending logout from repopulating the cache after logout succeeds", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
+    api.inventoryPatchMode = "pending";
+    let authenticated = true;
+    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
+    let completeLogout!: () => void;
+    let access!: ReturnType<typeof useSessionAccess>;
+    let toastTitles: unknown[] = [];
+    globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
+      if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>(resolve => {
+        completeLogout = () => {
+          authenticated = false;
+          resolve(new Response(JSON.stringify({ authenticated: false, account: null, csrfToken: "anonymous-token" }), { headers: { "Content-Type": "application/json" } }));
+        };
+      });
+      if (!authenticated) return new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } });
+      return api.fetch(input, init);
+    };
+    function AccountHarness() {
+      access = useSessionAccess();
+      toastTitles = useToast().toasts.map((toast) => toast.title);
+      return <Dashboard />;
+    }
+    const client = createQueryClient();
+    const location = memoryLocation({ path: "/dashboard" });
+    const tree = () => <QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><Switch><Route path="/dashboard"><AccountHarness /></Route><Route path="/login"><p>Signed out</p></Route></Switch></LoginGate></Router></QueryClientProvider>;
+    const view = render(tree());
+    await screen.findByRole("button", { name: "Edit Milk" });
+    const beforeLogoutScope = access.isCurrentScope;
+    let logoutResult!: Promise<void>;
+    await act(async () => { logoutResult = access.logout(); });
+    // A render during the request lets a newly opened editor capture the
+    // temporary logout scope, which must also be revoked on success.
+    view.rerender(tree());
+    const duringLogoutScope = access.isCurrentScope;
+    assert.equal(beforeLogoutScope(), false);
+    assert.equal(duringLogoutScope(), true);
+    await edit();
+    changeInput("input-item-quantity", "0");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
+    const beforeToasts = [...toastTitles];
+    await act(async () => { completeLogout(); await logoutResult; });
+    await screen.findByText("Signed out");
+    assert.equal(duringLogoutScope(), false);
+    assert.equal(client.getQueryCache().getAll().length, 0);
+    const cacheEvents: string[] = [];
+    const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
+    await act(async () => { api.resolveInventoryPatch?.(); });
+    assert.equal(api.items[0]!.quantity, 0);
+    assert.deepEqual(cacheEvents, []);
+    unsubscribe();
+    assert.equal(client.getQueryCache().getAll().length, 0);
+    assert.ok(screen.getByText("Signed out"));
+    assert.equal(screen.queryByRole("dialog"), null);
+    assert.equal(screen.queryByRole("button", { name: /Account menu for/ }), null);
+    assert.deepEqual(toastTitles, beforeToasts);
   });
 
   function setup(items = [dashboardItem(101, "Milk", "Dairy", 1.5, 2, -1)]) {

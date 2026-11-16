@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { Redirect, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { getAuthSession, logoutSession, setCsrfToken, setUnauthorizedHandler, type AuthAccount, type AuthSession } from "@workspace/api-client-react";
+import { refreshPantry } from "./refresh-pantry";
 
 const PreviewAccess = createContext({ demo: false, account: null as AuthAccount | null, isCurrentScope: (): boolean => true, complete: () => {}, signedIn: (_session: AuthSession) => {}, logout: async () => {} });
 export const useSessionAccess = () => useContext(PreviewAccess);
@@ -81,10 +82,12 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
               if (scope.current === logoutScope && nextScope.current === logoutScope) {
                 scope.current = previousScope;
                 setScopeRevision(value => value + 1);
+                refreshPantry(client, undefined, { refetchItemDetails: true });
               }
               throw error;
             }
           }
+          advanceScope();
           setCompleted(false);
           setAccount(null);
           client.clear();
