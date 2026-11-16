@@ -117,8 +117,8 @@ sequenceDiagram
     API->>DB: Lock row; validate and record adjustment
     DB-->>API: Transaction committed
     API-->>UI: Confirmed inventory
-    API-)SSE: After-commit PantryChanged
-    SSE--)UI: SSE inventory_changed signal
+    API-->>SSE: After-commit PantryChanged
+    SSE-->>UI: SSE inventory_changed signal
     UI->>UI: Refetch dependent queries; show Undo
 ```
 
