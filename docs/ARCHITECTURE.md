@@ -85,63 +85,79 @@ React routes load on demand through dynamic imports. The session gate runs befor
 
 The inventory adjustment and shopping-list lifecycles are shown separately to avoid crossing arrows and repeated loops.
 
-### Inventory adjustment and Undo
+### Inventory adjustment
 
 ```mermaid
-flowchart TD
-    Edit["Consume or Restock"] --> Valid{"Valid amount and stock?"}
-    Valid -->|No| Error["Show validation error"]
-    Valid -->|Yes| Save["Atomic adjustment with retry key"]
-    Save --> Confirm["Show new quantity and Undo"]
-    Confirm --> Undo{"Undo requested?"}
-    Undo -->|Yes| Check{"Within 5 min and no later write?"}
-    Check -->|Yes| Restore["Restore previous quantity once"]
-    Check -->|No| Conflict["Explain expiry or conflict"]
-    Save -.-> Refresh["Refresh dependent views"]
-    Restore --> Refresh
-
+flowchart LR
+    Edit["Consume / Restock"] --> Valid{"Valid stock and amount?"}
+    Valid -->|Yes| Save["Commit adjustment"] --> Show["Show result + Undo"]
+    Valid -->|No| Error["Validation error"]
     classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
     classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
     classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
     classDef failure fill:#FDEDEC,stroke:#C65656,color:#792C2C,stroke-width:1.5px
-    class Edit,Confirm action
-    class Valid,Undo,Check decision
-    class Save,Restore,Refresh success
-    class Error,Conflict failure
+    class Edit action
+    class Valid decision
+    class Save,Show success
+    class Error failure
 ```
 
-An error keeps the user in the adjustment dialog. The server determines Undo eligibility; expiry or an intervening write never overwrites newer stock.
-
-### Suggestions to completed purchase
+### Undo eligibility
 
 ```mermaid
-flowchart TD
-    Dashboard["Dashboard attention"] --> Review["Review suggested quantities"]
-    Review --> Pick{"Confirm selected stock items?"}
-    Pick -->|No| Dashboard
-    Pick -->|Yes| List["Create shopping list"]
-    List --> Buy["Mark items bought"]
-    Buy --> Complete["Complete purchase"]
-    Complete --> Restock["Restock linked inventory rows once"]
-    Restock --> Refresh["Refresh inventory and dashboard"]
-
+flowchart LR
+    Undo["User selects Undo"] --> Check{"Within 5 minutes and no newer write?"}
+    Check -->|Yes| Restore["Restore quantity once"] --> Refresh["Refresh views"]
+    Check -->|No| Conflict["Explain conflict / expiry"]
     classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
     classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
     classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
-    class Dashboard,Review,List,Buy,Complete action
-    class Pick decision
+    classDef failure fill:#FDEDEC,stroke:#C65656,color:#792C2C,stroke-width:1.5px
+    class Undo action
+    class Check decision
+    class Restore,Refresh success
+    class Conflict failure
+```
+
+Invalid adjustments keep the user in the dialog. A successful adjustment refreshes dependent views whether or not the user chooses Undo. The server authoritatively checks expiry and intervening writes, so Undo cannot overwrite newer stock.
+
+### Generate a shopping list
+
+```mermaid
+flowchart LR
+    Attention["Stock attention"] --> Review["Review quantities"]
+    Review --> Decide{"Confirm items?"}
+    Decide -->|Yes| List["Create shopping list"]
+    Decide -->|No| Stop["Return to dashboard"]
+    classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    class Attention,Review,Stop action
+    class Decide decision
+    class List success
+```
+
+### Complete a purchase
+
+```mermaid
+flowchart LR
+    List["Shopping list"] --> Buy["Mark items bought"]
+    Buy --> Complete["Complete purchase"]
+    Complete --> Restock["Restock linked rows once"]
+    Restock --> Refresh["Refresh inventory / dashboard"]
+    classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    class List,Buy,Complete action
     class Restock,Refresh success
 ```
 
 Only out-of-stock and low-stock suggestions can generate shopping items; expiry-only reminders are excluded. Manual shopping rows without linked inventory are not automatically restocked.
 
-
-
 Normal login/signup uses server-verified email codes and database-backed sessions; email is the only offered method by default, and browser-only mock authentication remains a preview. Household authorization remains separate work. Shopping-list generation revalidates selected items against current stock on the server. Purchase completion leaves unlinked manual shopping items out of inventory.
 
 ## Adjustment transaction and refresh sequence
 
-The main transaction and the retry outcomes are split so each sequence remains readable.
+The successful transaction is a sequence diagram; retry and failure outcomes are a compact decision flow.
 
 ### Successful adjustment and refresh
 
@@ -169,30 +185,24 @@ The HTTP response and SSE signal can arrive in either order. The UI refreshes fr
 ### Idempotency and failure handling
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant UI as React UI
-    participant API as Spring API
-    participant DB as Database
-
-    UI->>API: POST adjustment + request key
-    API->>DB: Lock item, inspect existing key
-    alt Identical retry
-        DB-->>API: Existing adjustment
-        API-->>UI: Current inventory, no second write
-    else Key reused with different payload
-        API-->>UI: Reject, stock unchanged
-    else New adjustment
-        API->>DB: Validate, update quantity / revision, save history
-        alt Transaction commits
-            DB-->>API: Committed
-            API-->>UI: Confirmed inventory
-        else Transaction rolls back
-            DB-->>API: Rolled back
-            API-->>UI: Error, stock and history unchanged
-        end
-    end
+flowchart LR
+    Request["Adjustment + key"] --> Key{"Existing key?"}
+    Key -->|Same payload| Retry["Return current item"]
+    Key -->|Different payload| Reject["Reject; no write"]
+    Key -->|No| Write{"Transaction result"}
+    Write -->|Committed| Saved["Save quantity + history"]
+    Write -->|Rolled back| Fail["No changes"]
+    classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    classDef failure fill:#FDEDEC,stroke:#C65656,color:#792C2C,stroke-width:1.5px
+    class Request action
+    class Key,Write decision
+    class Retry,Saved success
+    class Reject,Fail failure
 ```
+
+The service locks the inventory row and inspects the item-scoped request key. A new valid adjustment updates quantity, revision, and history atomically; a rollback preserves stock and history.
 
 The after-commit listener only publishes refresh signals for committed changes. Undo runs as its own transaction with row locking, expiry and revision checks.
 
