@@ -19,6 +19,7 @@ const { memoryLocation } = await import("wouter/memory-location");
 const { setCsrfToken } = await import("@workspace/api-client-react");
 const { act, cleanup, fireEvent, render, screen, waitFor, within } = await import("@testing-library/react");
 const { AppRoutes } = await import("../App");
+const { LoginGate, useSessionAccess } = await import("../lib/preview-access");
 const { RouteLoadingBoundary } = await import("../components/route-loading-boundary");
 const originalFetch = globalThis.fetch;
 const clients = new Set<InstanceType<typeof QueryClient>>();
@@ -473,6 +474,55 @@ describe("real email authentication", { concurrency: false }, () => {
     await screen.findByRole("heading", { name: "Welcome home." });
     assert.ok(screen.queryByRole("button", { name: /Account menu for/ }) === null);
     assert.ok(screen.queryByText("user@example.com") === null);
+  });
+
+  it("renews the usable scope after rejected logout while preserving authentication and invalidating older operations", async () => {
+    const api = new AuthApi();
+    api.authenticated = true;
+    api.csrf = "signed-in-token";
+    const failure = new TypeError("Logout connection failed");
+    let failLogout = true;
+    globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith("/api/auth/logout") && failLogout) throw failure;
+      return api.fetch(input, init);
+    };
+    let access!: ReturnType<typeof useSessionAccess>;
+    function ProtectedContent() {
+      access = useSessionAccess();
+      return <p>Protected content for {access.account?.email}</p>;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    clients.add(client);
+    const location = memoryLocation({ path: "/dashboard" });
+    await act(async () => {
+      render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><ProtectedContent /></LoginGate></Router></QueryClientProvider>);
+    });
+    assert.ok(screen.getByText("Protected content for user@example.com"));
+    const account = access.account;
+    const oldScope = access.isCurrentScope;
+    assert.equal(oldScope(), true);
+    const cached = { stock: "Private stock" };
+    client.setQueryData(["private-pantry"], cached);
+    await act(async () => {
+      const pending = access.logout();
+      assert.equal(oldScope(), false);
+      await assert.rejects(pending, error => error === failure);
+    });
+    assert.equal(api.authenticated, true);
+    assert.equal(access.account, account);
+    assert.ok(screen.getByText("Protected content for user@example.com"));
+    assert.equal(client.getQueryData(["private-pantry"]), cached);
+    assert.equal(access.isCurrentScope(), true);
+    assert.equal(oldScope(), false);
+    // Successful retry also proves the failed attempt preserved the CSRF token.
+    failLogout = false;
+    const recoveredScope = access.isCurrentScope;
+    await act(async () => { await access.logout(); });
+    assert.equal(api.requests.find(request => request.path === "/api/auth/logout")?.csrf, "signed-in-token");
+    assert.equal(api.authenticated, false);
+    assert.equal(recoveredScope(), false);
+    assert.equal(client.getQueryData(["private-pantry"]), undefined);
+    assert.equal(screen.queryByText("Protected content for user@example.com"), null);
   });
 
   it("keeps the session after a failed logout and prevents duplicate pending logout", async () => {

@@ -1213,6 +1213,58 @@ describe("dashboard attention editing", () => {
     assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Second account milk"));
   });
 
+  it("refreshes a successful edit after logout is rejected and the account stays signed in", async () => {
+    const api = new GroceryApiMock();
+    api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
+    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
+    let logout!: () => Promise<void>;
+    let toastTitles: unknown[] = [];
+    globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
+      if (String(input).endsWith("/api/auth/logout")) return new Response(JSON.stringify({ error: "Unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } });
+      return api.fetch(input, init);
+    };
+    function AccountHarness() {
+      logout = useSessionAccess().logout;
+      toastTitles = useToast().toasts.map((toast) => toast.title);
+      return <Dashboard />;
+    }
+    const client = createQueryClient();
+    const location = memoryLocation({ path: "/dashboard" });
+    render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><AccountHarness /></LoginGate></Router></QueryClientProvider>);
+    await screen.findByRole("button", { name: "Edit Milk" }, { timeout: 5000 });
+    await edit();
+    api.inventoryPatchMode = "pending";
+    changeInput("input-item-quantity", "0");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
+    fireEvent.click(screen.getByTestId("button-cancel"));
+    await act(async () => { await assert.rejects(logout()); });
+    assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
+    const beforeToasts = [...toastTitles];
+    const cacheEvents: string[] = [];
+    const unsubscribe = client.getQueryCache().subscribe((event) => { cacheEvents.push(event.type); });
+    await act(async () => { api.resolveInventoryPatch?.(); });
+    assert.equal(api.items[0]!.quantity, 0);
+    assert.deepEqual(cacheEvents, []);
+    unsubscribe();
+    assert.deepEqual(toastTitles, beforeToasts);
+    assert.equal(client.getQueryData(getGetInventoryItemQueryKey(101)), undefined);
+    assert.equal(screen.getByTestId("stat-low-stock").textContent, "1");
+    api.inventoryPatchMode = "normal";
+    await edit();
+    changeInput("input-item-quantity", "5");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => {
+      assert.equal(api.items[0]!.quantity, 5);
+      assert.equal(screen.queryByRole("dialog"), null);
+      assert.equal(screen.queryByTestId("attention-item-101"), null);
+      assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
+      assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
+      assert.ok(toastTitles.includes("Milk updated."));
+    });
+  });
+
   function setup(items = [dashboardItem(101, "Milk", "Dairy", 1.5, 2, -1)]) {
     const api = new MockPantryApi({ inventory: items, lists: [], applied: [], nextId: 200 });
     const patches: { id: number; body: Record<string, unknown> }[] = [];

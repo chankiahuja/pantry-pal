@@ -16,6 +16,7 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
   const [account, setAccount] = useState<AuthAccount | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [, setScopeRevision] = useState(0);
   // Scope lifetime follows authentication, rather than an individual dialog.
   // Retained callbacks cannot refresh a cache cleared for a later session.
   const scope = useRef(0);
@@ -68,7 +69,15 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
         signedIn: session => { scope.current++; setCsrfToken(session.csrfToken); client.clear(); setCompleted(session.authenticated); setAccount(session.authenticated ? session.account : null); },
         logout: async () => {
           scope.current++;
-          if (!preview) { const session = await logoutSession(); setCsrfToken(session.csrfToken); }
+          if (!preview) {
+            try {
+              const session = await logoutSession();
+              setCsrfToken(session.csrfToken);
+            } catch (error) {
+              setScopeRevision(value => value + 1);
+              throw error;
+            }
+          }
           setCompleted(false);
           setAccount(null);
           client.clear();
