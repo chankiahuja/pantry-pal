@@ -12,7 +12,7 @@ This is an actively developed portfolio project. The current deployed environmen
 - **Adjust stock:** consume or restock an amount, with retry-safe updates and a time-limited Undo when no intervening change prevents it.
 - **See what needs attention:** view expired, out-of-stock, expiring-soon and low-stock items on the dashboard and in the notification panel.
 - **Plan a shop:** review shortage suggestions, adjust quantities, or create a shopping list yourself. Rename lists and edit item quantities, units and notes.
-- **Complete a purchase:** mark items purchased and restock linked inventory items. Repeating completion does not apply the same restock again; unlinked shopping items do not automatically become inventory.
+- **Complete a purchase:** mark shopping-list items as purchased, then complete the purchase to restock linked inventory items once. Repeating completion does not restock them again, and unlinked items do not automatically create inventory records.
 - **Sign in with email:** use one-time verification codes and server-backed sessions. Inventory and lists are scoped to the signed-in account.
 - **Manage your account:** sign out or delete your account after recent email verification.
 - **Send feedback:** use the contact form when the environment's support mailbox and mail transport are configured.
@@ -47,6 +47,15 @@ Recipe suggestions, meal planning and other extensions remain backlog work. Futu
 | Deployment | Docker on Render, with separate staging and proposed production Blueprints |
 
 Spring Boot serves the built frontend and `/api` from one service. The backend owns validation and committed stock; the browser cache refreshes after successful changes. SSE carries refresh signals rather than a durable notification history. OpenAPI generates client contracts, not the Spring implementation.
+
+### Architecture at a glance
+
+```mermaid
+flowchart LR
+    UI["React + TypeScript"] -->|"REST API"| API["Spring Boot"]
+    API --> DB[("H2 local / PostgreSQL")]
+    API -.->|"SSE refresh signals"| UI
+```
 
 Read the [architecture](docs/ARCHITECTURE.md) for diagrams covering the application, stock adjustments and shopping workflow.
 
