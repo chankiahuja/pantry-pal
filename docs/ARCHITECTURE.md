@@ -105,12 +105,12 @@ sequenceDiagram
     API->>DB: Look up item-scoped request key
     alt Identical retry
         DB-->>API: Existing adjustment
-        API->>DB: Read current inventory; finish without another write
-        API-->>UI: Current inventory; no duplicate adjustment
+        API->>DB: Read current inventory, finish without another write
+        API-->>UI: Current inventory, no duplicate adjustment
     else Key reused with another payload
         API-->>UI: Reject request without changing stock
     else New valid adjustment
-        API->>DB: Update quantity and revision; save history and Undo expiry
+        API->>DB: Update quantity and revision, save history and Undo expiry
         API->>API: Publish transaction-bound PantryChanged event
         API->>DB: Commit stock and history together
         API->>Events: Deliver event after successful commit
@@ -119,7 +119,7 @@ sequenceDiagram
         UI->>UI: Refresh dependent queries and show Undo
     end
 
-    Note over UI,Events: Response refresh works without SSE; the bell also polls suggestions
+    Note over UI,Events: Response refresh works without SSE, the bell also polls suggestions
     Note over API,DB: Rollback preserves stock/history and suppresses the transaction event
 ```
 
