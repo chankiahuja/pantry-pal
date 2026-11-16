@@ -18,7 +18,7 @@ flowchart TB
         Stream["EventSource connection"]
         Screens --> Queries
         Screens --> Feedback --> Queries
-        Bell -->|Read suggestions; poll every 30 seconds| Queries
+        Bell -->|"Read suggestions; poll every 30 seconds"| Queries
         Stream -->|Invalidate queries| Queries
     end
 
@@ -32,7 +32,7 @@ flowchart TB
         Scheduler["Scheduled stock and expiry check"]
         Controller --> Service --> Repo
         Controller --> Auth --> Repo
-        Service -.->|PantryChanged; delivered after commit| Events
+        Service -.->|"PantryChanged; delivered after commit"| Events
         Scheduler -->|Read current suggestions| Service
         Scheduler -->|Alert changes or heartbeat| Events
     end
