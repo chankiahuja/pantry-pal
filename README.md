@@ -155,6 +155,8 @@ Use a fresh Flyway-managed database. Former Drizzle databases are not automatica
 
 ## Further reading
 
+For a guided overview of the technical documentation, see the [Documentation Index](docs/README.md).
+
 - [Environment and local development](docs/ENVIRONMENT.md)
 - [Architecture and workflow diagrams](docs/ARCHITECTURE.md)
 - [Email OTP and session flow](docs/EMAIL-OTP-AUTH-FLOW.md)
