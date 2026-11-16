@@ -1242,15 +1242,24 @@ describe("dashboard attention editing", () => {
     await act(async () => { await assert.rejects(logout()); });
     assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
     const beforeToasts = [...toastTitles];
-    const cacheEvents: string[] = [];
-    const unsubscribe = client.getQueryCache().subscribe((event) => { cacheEvents.push(event.type); });
+    const invalidated: unknown[] = [];
+    const unsubscribe = client.getQueryCache().subscribe((event) => {
+      if (event.type === "updated" && event.action.type === "invalidate") invalidated.push(event.query.queryKey);
+    });
     await act(async () => { api.resolveInventoryPatch?.(); });
-    assert.equal(api.items[0]!.quantity, 0);
-    assert.deepEqual(cacheEvents, []);
+    await waitFor(() => {
+      for (const key of [getListInventoryItemsQueryKey(), getGetInventoryStatsQueryKey(), getGetGrocerySuggestionsQueryKey(), getGetInventoryItemQueryKey(101)]) {
+        assert.ok(invalidated.some((value) => JSON.stringify(value) === JSON.stringify(key)), JSON.stringify(key));
+      }
+      assert.equal(api.items[0]!.quantity, 0);
+      assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
+      assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), api.items);
+      assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
+      assert.equal(screen.getByTestId("stat-out-of-stock").textContent, "1");
+    });
     unsubscribe();
     assert.deepEqual(toastTitles, beforeToasts);
-    assert.equal(client.getQueryData(getGetInventoryItemQueryKey(101)), undefined);
-    assert.equal(screen.getByTestId("stat-low-stock").textContent, "1");
+    assert.equal(screen.queryByRole("dialog"), null);
     api.inventoryPatchMode = "normal";
     await edit();
     changeInput("input-item-quantity", "5");

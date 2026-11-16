@@ -16,7 +16,7 @@ dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { Router } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
-const { setCsrfToken } = await import("@workspace/api-client-react");
+const { getInventoryStats, setCsrfToken } = await import("@workspace/api-client-react");
 const { act, cleanup, fireEvent, render, screen, waitFor, within } = await import("@testing-library/react");
 const { AppRoutes } = await import("../App");
 const { LoginGate, useSessionAccess } = await import("../lib/preview-access");
@@ -476,7 +476,7 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.ok(screen.queryByText("user@example.com") === null);
   });
 
-  it("renews the usable scope after rejected logout while preserving authentication and invalidating older operations", async () => {
+  it("restores the same-account scope after rejected logout while preserving authentication", async () => {
     const api = new AuthApi();
     api.authenticated = true;
     api.csrf = "signed-in-token";
@@ -513,7 +513,7 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.ok(screen.getByText("Protected content for user@example.com"));
     assert.equal(client.getQueryData(["private-pantry"]), cached);
     assert.equal(access.isCurrentScope(), true);
-    assert.equal(oldScope(), false);
+    assert.equal(oldScope(), true);
     // Successful retry also proves the failed attempt preserved the CSRF token.
     failLogout = false;
     const recoveredScope = access.isCurrentScope;
@@ -524,6 +524,67 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.equal(client.getQueryData(["private-pantry"]), undefined);
     assert.equal(screen.queryByText("Protected content for user@example.com"), null);
   });
+
+  for (const transition of ["sign-in", "account switch", "unauthorized", "unmount", "another pending logout", "another failed logout"]) {
+    it(`does not restore a failed logout's scope after ${transition}`, async () => {
+      const api = new AuthApi();
+      api.authenticated = true;
+      const failure = new TypeError("First logout failed");
+      const secondFailure = new TypeError("Second logout failed");
+      const rejectLogouts: ((error: Error) => void)[] = [];
+      globalThis.fetch = async (input, init) => {
+        if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>((_resolve, reject) => { rejectLogouts.push(reject); });
+        return api.fetch(input, init);
+      };
+      let access!: ReturnType<typeof useSessionAccess>;
+      function ProtectedContent() {
+        access = useSessionAccess();
+        return <p>Protected content for {access.account?.email}</p>;
+      }
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+      clients.add(client);
+      const location = memoryLocation({ path: "/dashboard" });
+      let view!: ReturnType<typeof render>;
+      await act(async () => {
+        view = render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><ProtectedContent /></LoginGate></Router></QueryClientProvider>);
+      });
+      const previousScope = access.isCurrentScope;
+      let firstResult!: Promise<void>;
+      let secondResult: Promise<void> | undefined;
+      await act(async () => {
+        firstResult = assert.rejects(access.logout(), error => error === failure);
+      });
+      assert.equal(previousScope(), false);
+      await act(async () => {
+        if (transition === "sign-in" || transition === "account switch") {
+          access.signedIn({ authenticated: true, account: { ...api.account, id: transition === "account switch" ? 2 : 1 }, csrfToken: "new-session-token" });
+        } else if (transition === "unauthorized") {
+          api.authenticated = false;
+          await assert.rejects(getInventoryStats());
+        } else if (transition === "unmount") {
+          view.unmount();
+        } else {
+          secondResult = assert.rejects(access.logout(), error => error === secondFailure);
+          if (transition === "another failed logout") {
+            rejectLogouts[1]!(secondFailure);
+            await secondResult;
+          }
+        }
+      });
+      const interveningScope = access.isCurrentScope;
+      const wasCurrent = interveningScope();
+      const cached = { owner: transition };
+      client.setQueryData(["transition-cache"], cached);
+      await act(async () => { rejectLogouts[0]!(failure); await firstResult; });
+      assert.equal(previousScope(), false);
+      assert.equal(interveningScope(), wasCurrent);
+      assert.equal(client.getQueryData(["transition-cache"]), cached);
+      if (transition === "account switch") assert.equal(access.account?.id, 2);
+      if (transition === "another pending logout") {
+        await act(async () => { rejectLogouts[1]!(secondFailure); await secondResult; });
+      }
+    });
+  }
 
   it("keeps the session after a failed logout and prevents duplicate pending logout", async () => {
     const api = new AuthApi();

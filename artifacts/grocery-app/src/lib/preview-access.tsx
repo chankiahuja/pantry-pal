@@ -20,9 +20,12 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
   // Scope lifetime follows authentication, rather than an individual dialog.
   // Retained callbacks cannot refresh a cache cleared for a later session.
   const scope = useRef(0);
+  // Restoring a failed attempt must not reuse a later transition's identity.
+  const nextScope = useRef(0);
+  const advanceScope = () => (scope.current = ++nextScope.current);
   const scopeVersion = scope.current;
   useEffect(() => {
-    scope.current++;
+    advanceScope();
     let active = true;
     setReady(false);
     setError("");
@@ -32,10 +35,10 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
         navigate("/login", { replace: true });
       }
       setReady(true);
-      return () => { scope.current++; };
+      return () => { advanceScope(); };
     }
     setUnauthorizedHandler(() => {
-      scope.current++;
+      advanceScope();
       setAccount(null);
       setCompleted(false);
       setReady(false);
@@ -50,7 +53,7 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
       setAccount(session.authenticated ? session.account : null);
       setReady(true);
     }).catch(() => { if (active) setError("Unable to check your session. Check the connection and try again."); });
-    return () => { active = false; scope.current++; setUnauthorizedHandler(null); };
+    return () => { active = false; advanceScope(); setUnauthorizedHandler(null); };
   }, [preview, retry]);
 
   if (error) return <main role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Retry connection</button></main>;
@@ -66,15 +69,19 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
         account,
         isCurrentScope: () => scope.current === scopeVersion,
         complete: () => { if (preview) setCompleted(true); },
-        signedIn: session => { scope.current++; setCsrfToken(session.csrfToken); client.clear(); setCompleted(session.authenticated); setAccount(session.authenticated ? session.account : null); },
+        signedIn: session => { advanceScope(); setCsrfToken(session.csrfToken); client.clear(); setCompleted(session.authenticated); setAccount(session.authenticated ? session.account : null); },
         logout: async () => {
-          scope.current++;
+          const previousScope = scope.current;
+          const logoutScope = advanceScope();
           if (!preview) {
             try {
               const session = await logoutSession();
               setCsrfToken(session.csrfToken);
             } catch (error) {
-              setScopeRevision(value => value + 1);
+              if (scope.current === logoutScope && nextScope.current === logoutScope) {
+                scope.current = previousScope;
+                setScopeRevision(value => value + 1);
+              }
               throw error;
             }
           }
