@@ -98,7 +98,7 @@ All original defaults and extended configuration explanations remain in the [det
 | Configure mobile preview and country selector | [Mobile preview opt-in](ENVIRONMENT-DETAILED-REFERENCE.md#mobile-preview-opt-in) |
 | Claim legacy unowned records (operator-only) | [Legacy ownership procedure](ENVIRONMENT-DETAILED-REFERENCE.md#claiming-legacy-shared-pantry-data) |
 | Production access gate, proxy and secret handling | [Production profile and access gate](ENVIRONMENT-DETAILED-REFERENCE.md#production-profile-and-reverse-proxy) |
-| Run isolated PostgreSQL smoke tests | [Detailed PostgreSQL testing steps](ENVIRONMENT-DETAILED-REFERENCE.md#claiming-legacy-shared-pantry-data) |
+| Run isolated PostgreSQL smoke tests | [Detailed PostgreSQL testing steps](ENVIRONMENT-DETAILED-REFERENCE.md#isolated-postgresql-smoke-tests) |
 | Backup/export and restore reconciliation | [Backup/restore runbook](GS-136-BACKUP-RESTORE.md) |
 | Configure and validate email OTP | [Email OTP guide](EMAIL-OTP-AUTH-FLOW.md) |
 
