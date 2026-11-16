@@ -1,87 +1,168 @@
-# PantryPal prototype
+# PantryPal
 
-Household inventory, rule-based grocery suggestions, shopping lists, and event-driven in-app notifications.
+Keep track of what you have, what needs using soon, and what to buy next.
 
-The React theme adapts the supplied Pantry Pal design. Its logo, hero image and favicon live in the React app's public assets.
+PantryPal brings inventory, expiry reminders and shopping lists together. Add your essentials, record stock changes, and review shortages before your next shop. When a purchase is complete, items linked to your inventory can be restocked without applying the same purchase twice.
 
-The active backend is Java/Spring Boot in [backend](backend). The React/TypeScript app remains in [artifacts/grocery-app](artifacts/grocery-app). See [environment setup](docs/ENVIRONMENT.md) and [architecture](docs/ARCHITECTURE.md).
+This is an actively developed portfolio project. The current deployed environment is **staging on `GS-134`**; production launch is deferred. The application is free to use at this stage, with no subscription implemented.
 
-For visual walkthroughs, see the [application architecture](docs/ARCHITECTURE.md#application-overview), [pantry and shopping workflow](docs/ARCHITECTURE.md#pantry-and-shopping-workflow), and [transaction sequence](docs/ARCHITECTURE.md#adjustment-transaction-and-refresh-sequence).
+## What you can do
 
-## Quick start
+- **Manage inventory:** record categories, quantities, preset or custom units, minimum thresholds, optional expiry dates and notes.
+- **Adjust stock:** consume or restock an amount, with retry-safe updates and a time-limited Undo when no intervening change prevents it.
+- **See what needs attention:** view expired, out-of-stock, expiring-soon and low-stock items on the dashboard and in the notification panel.
+- **Plan a shop:** review shortage suggestions, adjust quantities, or create a shopping list yourself. Rename lists and edit item quantities, units and notes.
+- **Complete a purchase:** mark items purchased and restock linked inventory items. Repeating completion does not apply the same restock again; unlinked shopping items do not automatically become inventory.
+- **Sign in with email:** use one-time verification codes and server-backed sessions. Inventory and lists are scoped to the signed-in account.
+- **Manage your account:** sign out or delete your account after recent email verification.
+- **Send feedback:** use the contact form when the environment's support mailbox and mail transport are configured.
 
-### Local application on port 8080 (embedded database)
+Expiry and stock conditions can overlap. The primary alert follows this order: **Expired → Out of Stock → Expiring Soon → Low Stock**. Other applicable conditions remain available; expiry-only reminders do not create shopping suggestions. See the [architecture and workflow guide](docs/ARCHITECTURE.md) for how these pieces fit together.
 
-Install Node.js 24 and Java 17+, and set `JAVA_HOME` to your JDK directory. The root `pnpm start` command loads an optional ignored `.env` before launching Spring. From the repository root:
+## Current scope
+
+| Available now | Not available yet |
+| --- | --- |
+| Browser-based inventory and shopping workflows | Native mobile apps |
+| In-app stock and expiry alerts | Scheduled expiry emails; the app labels these as planned |
+| Account-scoped data and independent sign-in sessions | Shared households, invitations and roles |
+| Preset and custom unit entry | Barcode or receipt scanning |
+| Illustrative price-comparison screen | Live retailer prices, grocery ordering or payments |
+| Active-database account deletion | Instant erasure of delivered mail, browser copies or backups |
+
+Recipe suggestions, meal planning and other extensions remain backlog work. Future features are not required to explore the current application locally.
+
+## How it is built
+
+| Part | Technology and role |
+| --- | --- |
+| Frontend | React, TypeScript and Vite; TanStack Query caches API responses |
+| Backend | Java / Spring Boot, Spring Security and parameterized JDBC |
+| Database | PostgreSQL in staging and the optional local Docker setup; file-backed H2 for the default local setup |
+| Schema changes | Versioned Flyway migrations |
+| API contracts | OpenAPI with Orval-generated TypeScript clients and Zod schemas |
+| Authentication | Email OTP, database-backed sessions and CSRF protection |
+| Refresh signals | Server-Sent Events (SSE) and query refetching |
+| Email | SMTP; Mailpit for local development, provider configuration for staging |
+| Deployment | Docker on Render, with separate staging and proposed production Blueprints |
+
+Spring Boot serves the built frontend and `/api` from one service. The backend owns validation and committed stock; the browser cache refreshes after successful changes. SSE carries refresh signals rather than a durable notification history. OpenAPI generates client contracts, not the Spring implementation.
+
+Read the [architecture](docs/ARCHITECTURE.md) for diagrams covering the application, stock adjustments and shopping workflow.
+
+## Branches and environments
+
+| Environment | Branch / configuration | Status |
+| --- | --- | --- |
+| Local development | Your working branch | H2, PostgreSQL or a browser-only mock mode |
+| Render staging | `GS-134` · [render.yaml](render.yaml) | Current integration and browser-verification environment |
+| Proposed production | `main` · [render.production.yaml](render.production.yaml) | Preparation only; provisioning and cutover are deferred |
+
+Staging is a test environment, not a place to keep important or irreplaceable data. Its free hosting can sleep and the database has lifecycle limits. Running the Spring `production` profile on staging enables deployment settings; it does not mean the production launch is complete.
+
+The production Blueprint and [production plan](docs/GS-141-PRODUCTION-PLAN.md) describe a separate future environment. Their presence does not mean those resources, backups or the production domain are live.
+
+## Run locally
+
+Use **Node.js 24**, **pnpm 10.26.1** and **JDK 17+**. The repository includes the Maven wrapper, so a global Maven install is not required. Initial dependency and wrapper downloads require network access.
+
+### Option 1: Spring Boot with local H2
+
+Start Mailpit with SMTP listening on `127.0.0.1:1025` and its inbox on `127.0.0.1:8025`. For example, with an installed Mailpit executable:
+
+```sh
+mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025
+```
+
+In another terminal, from the repository root:
 
 ```sh
 npx pnpm@10.26.1 install
 npx pnpm@10.26.1 start
 ```
 
-Open http://localhost:8080. Start Mailpit for email sign-in as described below. Spring Boot serves React and the real API using embedded, file-backed H2. No Docker or separate database is required. Flyway creates the schema on first startup. Pantry and shopping data survive restarts in `backend/data/pantrypal.mv.db` (ignored by Git). This starts with an empty pantry; it does not import browser demo data. Stop with Ctrl+C. Restart the command after frontend changes.
+Open [localhost:8080](http://localhost:8080). Create an account, then read its verification code in [Mailpit](http://localhost:8025). Mailpit captures messages locally; it does not deliver them to a real inbox.
 
-The `local` Spring profile is the default. Set `PANTRYPAL_DATA_DIR` to an absolute directory to choose a stable database location when launching from different working directories; otherwise `./data` is relative to the Java process. Set `SPRING_PROFILES_ACTIVE=postgres` and the `DB_URL`, `DB_USER`, `DB_PASSWORD` variables to use PostgreSQL instead.
+The app starts with an empty pantry. H2 data persists in `backend/data/pantrypal.mv.db`, which is ignored by Git. Stop with Ctrl+C; rerun the start command after frontend changes.
 
-### Frontend demo (no backend or database)
+Set `JAVA_HOME` to your installed JDK if needed. The start launcher reads an optional ignored root `.env`; direct Maven launches require environment variables in the shell or IDE. See [environment setup](docs/ENVIRONMENT.md) for data-directory and PostgreSQL profile settings.
 
-To add the same sample pantry and Weekend groceries list to the running Spring Boot app on port 8080, run `npx pnpm@10.26.1 seed:demo` from the repository root after starting Mailpit. This explicit local command reuses the browser demo dataset, adds missing examples through the API, and preserves existing quantities and purchase progress when repeated. It does not import browser localStorage. H2 retains these records across restarts; samples are not automatically recreated when you delete them. Expiry dates for newly added examples are relative to the day you run the command.
+### Option 2: Docker Compose with PostgreSQL
+
+With Docker and Compose running, from the repository root:
+
+```sh
+docker compose up --build -d
+```
+
+Open [localhost:8080](http://localhost:8080) and read email codes in [Mailpit](http://localhost:8025). Compose starts PostgreSQL, Mailpit and the app. Stop native Mailpit first if it already occupies those ports.
+
+`docker compose down` stops the services while retaining the database volume. Rebuild after source changes. These Compose settings are for local development, not a production deployment.
+
+### Browser-only development preview
+
+For UI exploration without Java, a database or email delivery:
 
 ```sh
 npx pnpm@10.26.1 install
 npx pnpm@10.26.1 dev:mock
 ```
 
-Open http://localhost:5173. Demo mode includes sample pantry items, stock and expiry alerts, and a shopping list. Add/edit/delete items, generate lists, and complete purchases. Changes stay in this browser; **Reset demo data** restores the samples. Sample expiry dates are relative to the day the demo is first seeded. This is local sample data, not an import of the former Replit database.
+Open [localhost:5173](http://localhost:5173). This explicit local mode uses sample data in browser storage and preview authentication, not server-backed accounts. It must not be confused with staging or production authentication. Reset demo data restores its local samples.
 
-### Email sign-in and signup
+To seed an already-running local full-stack app instead, use `npx pnpm@10.26.1 seed:demo` and follow the Mailpit verification prompt. This is a separate authenticated API operation, not an import of browser storage. See [environment setup](docs/ENVIRONMENT.md).
 
-See the [email OTP authentication flow](docs/EMAIL-OTP-AUTH-FLOW.md) for request and verification diagrams, session handling, and edge cases.
+## Testing and verification
 
-Normal full-stack mode uses real email OTP and persistent server-side sessions. Start Mailpit locally (SMTP on `localhost:1025`, inbox at http://localhost:8025), then start PantryPal. Choose **Email address**, enter a valid email and request a code. Mailpit captures the message; enter its six-digit code in PantryPal. Signup requires a name and creates an account after verification. Codes expire after five minutes, can be used once, and are subject to server-enforced resend and attempt limits. Signed-in sessions survive page reloads and server restarts through the database; logout invalidates the session. Pantry and shopping API requests require a session and are scoped to that account. See [environment setup](docs/ENVIRONMENT.md#claiming-legacy-shared-pantry-data) for the operator-only legacy data claim procedure.
+Verification combines executable tests, hands-on browser checks and AI-assisted review. Each provides different evidence; an agent's summary or a passing build does not establish that every flow works.
 
-`dev:mock` keeps the browser-only email OTP preview with code `123456` and localStorage pantry data. Its navigation gate does not authenticate against Spring. Login and signup offer email only by default in both normal and demo mode. The mobile preview and country selector are preserved behind the disabled-by-default `VITE_ENABLE_MOBILE_PREVIEW` build flag; explicitly enabling it restores only a preview, never SMS delivery or backend authentication. See [environment setup](docs/ENVIRONMENT.md#mobile-preview-opt-in) for opt-in instructions and [the email-only release check](docs/GS-114-EMAIL-ONLY-AUTH.md) for account audit scope.
+| Method | What it checks | Limits |
+| --- | --- | --- |
+| Backend automated tests | Validation, account boundaries, authentication, stock transactions, purchase retry safety and notification lifecycle | Default H2 results do not prove PostgreSQL behavior |
+| Frontend and schema tests | Forms, mock handlers, route/session states, regression scenarios and generated-schema validation | DOM tests do not establish real browser layout, contrast or mobile reachability |
+| Manual staging checks | Real OTP delivery, browser behavior, cookies, end-to-end workflows and persistence after a service restart | Results apply to the tested revision, environment and browser |
+| AI-assisted testing and review | Coding-agent test execution and investigation, plus CodeRabbit PR review | Agents can miss defects; review findings need validation, and reported results must identify what actually ran |
 
-Login sends a code only for an existing account. Its response says “If an account exists for this email, we'll send a verification code” without confirming account existence or delivery. Login delivery runs in a bounded background queue; signup remains the way to create an account and sends its code synchronously. If no login code arrives, check the email/spam folder or choose Create an account. After a restart or delivery failure, request another code after the cooldown.
+Staging checks have been carried out during development by the project owner, alongside agent-assisted verification. Record the deployed revision, browser/viewport, procedure, result and remaining gaps in the relevant issue or PR. Keep credentials, session values, OTPs and personal message contents out of evidence.
 
-The `seed:demo` command requests a local email code, prompts for the code shown in Mailpit and then seeds through an authenticated session. Optionally set `DEMO_SEED_EMAIL` to skip the email prompt. See [environment setup](docs/ENVIRONMENT.md) for mail and session settings.
-
-### Optional PostgreSQL setup with Docker
-
-Install Docker Desktop with Compose and start Docker. From the repository root:
-
-```sh
-docker compose up --build -d
-```
-
-Open http://localhost:8080. Spring Boot's embedded server serves both the built React app and `/api`, including http://localhost:8080/api/healthz. No Vite server is required. PostgreSQL data persists in the Compose volume. `docker compose down` stops the services and retains data. Rebuild with the same command after source changes.
-
-For native Java development with PostgreSQL, set `SPRING_PROFILES_ACTIVE=postgres`, configure `DB_URL`, `DB_USER`, and `DB_PASSWORD`, and start your database. From the repository root run:
+From the repository root:
 
 ```sh
-npx pnpm@10.26.1 install
-npx pnpm@10.26.1 start
-```
-
-This builds React, copies its output into the Spring classpath through Maven resources, and starts Spring Boot on http://localhost:8080. Restart this command after frontend changes. To package a standalone JAR, run `npx pnpm@10.26.1 build`, then `sh ./mvnw clean package` inside `backend` (Windows: `.\mvnw.cmd clean package`). The wrapper downloads Maven on first use. Optional Vite hot reload remains available with `npx pnpm@10.26.1 dev` on port 5173 while Spring is running.
-
-## Checks
-
-```sh
-# From backend; Windows uses mvnw.cmd
-sh ./mvnw test
-# From repository root
-npx pnpm@10.26.1 --filter @workspace/grocery-app typecheck
 npx pnpm@10.26.1 --filter @workspace/grocery-app test
+npx pnpm@10.26.1 --filter @workspace/api-zod test
 npx pnpm@10.26.1 build
 ```
 
-Backend tests use H2 in PostgreSQL compatibility mode, with the actual Flyway migration. PostgreSQL runtime checks still require Docker or an accessible PostgreSQL server.
+The root build includes typechecking. From `backend`:
 
-## Migration boundary
+```sh
+sh ./mvnw test
+```
 
-The original Express backend, Drizzle database library and server-side Zod package are retained as historical reference, excluded from the active pnpm workspace. Do not start them alongside Spring. The existing generated React client continues using the same `/api` contract.
+On Windows, use `.\mvnw.cmd test`. Run PostgreSQL-specific migration, isolation, concurrency and restart checks against an isolated test database. Do not point destructive tests at staging, production or your normal local database.
 
-Use a fresh prototype database. Existing Drizzle databases are **not automatically imported** or baselined by Flyway. Export/import work is separate from this code migration.
+No fixed test count is promised here: counts and outcomes belong with the revision that was actually checked.
 
-Agent entry points: [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [GEMINI.md](GEMINI.md). Project workflow skill: [pantrypal-development](.agents/skills/pantrypal-development/SKILL.md).
+## Data and operational boundaries
+
+- Keep deployment credentials in protected configuration and local secrets in ignored files.
+- Account deletion removes owned records from the active database and revokes sessions. Email-provider, mailbox and backup copies require separate handling.
+- Production backup retention and restore reconciliation remain release requirements; a local rehearsal is not production backup evidence.
+- Household sharing is not implemented merely because the interface says “My household.”
+- The active backend is `backend/`. The old Express service in `artifacts/api-server/` and Drizzle package in `lib/db/` are historical and excluded from the active workspace. **`lib/api-zod/` is active** and contains generated validation schemas.
+
+Use a fresh Flyway-managed database. Former Drizzle databases are not automatically imported or baselined.
+
+## Further reading
+
+- [Environment and local development](docs/ENVIRONMENT.md)
+- [Architecture and workflow diagrams](docs/ARCHITECTURE.md)
+- [Email OTP and session flow](docs/EMAIL-OTP-AUTH-FLOW.md)
+- [Account deletion and recovery boundaries](docs/GS-137-DATA-DELETION.md)
+- [Backup and restore runbook](docs/GS-136-BACKUP-RESTORE.md)
+- [Production preparation plan](docs/GS-141-PRODUCTION-PLAN.md)
+- [API specification](lib/api-spec/openapi.yaml)
+- [GitHub Wiki](https://github.com/chankiahuja/pantry-pal/wiki)
+- [Open issues](https://github.com/chankiahuja/pantry-pal/issues)
+
+Contributor guidance starts in [AGENTS.md](AGENTS.md). Agent-specific entry points also include [CLAUDE.md](CLAUDE.md) and [GEMINI.md](GEMINI.md).
