@@ -121,6 +121,8 @@ For native PostgreSQL, set `$env:SPRING_PROFILES_ACTIVE = 'postgres'` and config
 
 Switching from H2 to PostgreSQL does not transfer or delete H2 records. Keep the H2 database files intact; if existing records are needed in PostgreSQL, plan and verify a separate one-time export/import before switching normal app use. PantryPal's notifications are process-local refresh signals, not durable records; after restart, active alerts are reconstructed from the PostgreSQL-backed pantry via `/api/suggestions`.
 
+### Isolated PostgreSQL smoke tests
+
 The opt-in PostgreSQL smoke tests create and drop uniquely named schemas inside the isolated test database. From `backend`, configure only `DB_URL`, `DB_USER`, and `DB_PASSWORD` for `pantrypal_auth_test`, then run:
 
 ```powershell
