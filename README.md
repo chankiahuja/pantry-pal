@@ -55,6 +55,7 @@ flowchart LR
     UI["React + TypeScript"] -->|"REST API"| API["Spring Boot"]
     API --> DB[("H2 local / PostgreSQL")]
     API -.->|"SSE refresh signals"| UI
+    SPEC["OpenAPI Specification"] -.->|"Generates TypeScript client"| UI
 ```
 
 Read the [architecture](docs/ARCHITECTURE.md) for diagrams covering the application, stock adjustments and shopping workflow.
