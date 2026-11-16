@@ -16,9 +16,10 @@ dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { Router } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
-const { setCsrfToken } = await import("@workspace/api-client-react");
+const { getInventoryStats, getGetInventoryStatsQueryKey, setCsrfToken } = await import("@workspace/api-client-react");
 const { act, cleanup, fireEvent, render, screen, waitFor, within } = await import("@testing-library/react");
 const { AppRoutes } = await import("../App");
+const { LoginGate, useSessionAccess } = await import("../lib/preview-access");
 const { RouteLoadingBoundary } = await import("../components/route-loading-boundary");
 const originalFetch = globalThis.fetch;
 const clients = new Set<InstanceType<typeof QueryClient>>();
@@ -474,6 +475,114 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.ok(screen.queryByRole("button", { name: /Account menu for/ }) === null);
     assert.ok(screen.queryByText("user@example.com") === null);
   });
+
+  it("retains the confirmed scope and cache after rejected logout", async () => {
+    const api = new AuthApi();
+    api.authenticated = true;
+    api.csrf = "signed-in-token";
+    const failure = new TypeError("Logout connection failed");
+    let failLogout = true;
+    globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith("/api/auth/logout") && failLogout) throw failure;
+      return api.fetch(input, init);
+    };
+    let access!: ReturnType<typeof useSessionAccess>;
+    function ProtectedContent() {
+      access = useSessionAccess();
+      return <p>Protected content for {access.account?.email}</p>;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    clients.add(client);
+    const location = memoryLocation({ path: "/dashboard" });
+    await act(async () => {
+      render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><ProtectedContent /></LoginGate></Router></QueryClientProvider>);
+    });
+    assert.ok(screen.getByText("Protected content for user@example.com"));
+    const account = access.account;
+    const oldScope = access.isCurrentScope;
+    assert.equal(oldScope(), true);
+    const cached = { stock: "Private stock" };
+    client.setQueryData(["private-pantry"], cached);
+    const cacheEvents: string[] = [];
+    const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
+    await act(async () => {
+      const pending = access.logout();
+      assert.equal(oldScope(), true);
+      await assert.rejects(pending, error => error === failure);
+    });
+    assert.deepEqual(cacheEvents, []);
+    unsubscribe();
+    assert.equal(api.authenticated, true);
+    assert.equal(access.account, account);
+    assert.ok(screen.getByText("Protected content for user@example.com"));
+    assert.equal(client.getQueryData(["private-pantry"]), cached);
+    assert.equal(access.isCurrentScope(), true);
+    assert.equal(oldScope(), true);
+    // Successful retry also proves the failed attempt preserved the CSRF token.
+    failLogout = false;
+    const recoveredScope = access.isCurrentScope;
+    await act(async () => { await access.logout(); });
+    assert.equal(api.requests.find(request => request.path === "/api/auth/logout")?.csrf, "signed-in-token");
+    assert.equal(api.authenticated, false);
+    assert.equal(recoveredScope(), false);
+    assert.equal(client.getQueryData(["private-pantry"]), undefined);
+    assert.equal(screen.queryByText("Protected content for user@example.com"), null);
+  });
+
+  for (const transition of ["sign-in", "account switch", "unauthorized", "unmount"]) {
+    it(`keeps previous-account operations invalid after ${transition} and logout rejection`, async () => {
+      const api = new AuthApi();
+      api.authenticated = true;
+      const failure = new TypeError("First logout failed");
+      const rejectLogouts: ((error: Error) => void)[] = [];
+      globalThis.fetch = async (input, init) => {
+        if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>((_resolve, reject) => { rejectLogouts.push(reject); });
+        return api.fetch(input, init);
+      };
+      let access!: ReturnType<typeof useSessionAccess>;
+      function ProtectedContent() {
+        access = useSessionAccess();
+        return <p>Protected content for {access.account?.email}</p>;
+      }
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+      clients.add(client);
+      const location = memoryLocation({ path: "/dashboard" });
+      let view!: ReturnType<typeof render>;
+      await act(async () => {
+        view = render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><ProtectedContent /></LoginGate></Router></QueryClientProvider>);
+      });
+      const previousScope = access.isCurrentScope;
+      let firstResult!: Promise<void>;
+      await act(async () => {
+        firstResult = assert.rejects(access.logout(), error => error === failure);
+      });
+      assert.equal(previousScope(), true);
+      await act(async () => {
+        if (transition === "sign-in" || transition === "account switch") {
+          access.signedIn({ authenticated: true, account: { ...api.account, id: transition === "account switch" ? 2 : 1 }, csrfToken: "new-session-token" });
+        } else if (transition === "unauthorized") {
+          api.authenticated = false;
+          await assert.rejects(getInventoryStats());
+        } else if (transition === "unmount") {
+          view.unmount();
+        }
+      });
+      const interveningScope = access.isCurrentScope;
+      const wasCurrent = interveningScope();
+      const cached = { owner: transition };
+      client.setQueryData(["transition-cache"], cached);
+      client.setQueryData(getGetInventoryStatsQueryKey(), cached);
+      const cacheEvents: string[] = [];
+      const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
+      await act(async () => { rejectLogouts[0]!(failure); await firstResult; });
+      assert.equal(previousScope(), false);
+      assert.equal(interveningScope(), wasCurrent);
+      assert.equal(client.getQueryData(["transition-cache"]), cached);
+      assert.deepEqual(cacheEvents, []);
+      unsubscribe();
+      if (transition === "account switch") assert.equal(access.account?.id, 2);
+    });
+  }
 
   it("keeps the session after a failed logout and prevents duplicate pending logout", async () => {
     const api = new AuthApi();

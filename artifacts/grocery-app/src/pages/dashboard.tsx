@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { AlertCircle, ArrowRight, CheckCircle2, Clock, Package, RefreshCw, ShoppingCart } from "lucide-react";
 import {
   getListShoppingListsQueryKey,
+  getInventoryItem,
+  type InventoryItem,
   useGenerateShoppingListFromSuggestions,
   useGetGrocerySuggestions,
   useGetInventoryStats,
@@ -22,6 +24,9 @@ import { formatQuantity } from "@/lib/inventory-units";
 import { getAttentionItems, isShoppingEligible, type AttentionItem } from "@/lib/category-attention";
 import { useToast } from "@/hooks/use-toast";
 import { useUtcDate } from "@/hooks/use-utc-date";
+import { InventoryItemDialog } from "@/components/inventory-item-dialog";
+import { refreshPantry } from "@/lib/refresh-pantry";
+import { useSessionAccess } from "@/lib/preview-access";
 
 type ReviewItem = {
   inventoryItemId: number;
@@ -40,7 +45,7 @@ const statusUrgency = {
   lowStock: "low",
 } as const;
 
-function AttentionRow({ item }: { item: AttentionItem }) {
+function AttentionRow({ item, onEdit, loading }: { item: AttentionItem; onEdit: (id: number, button: HTMLButtonElement) => void; loading: boolean }) {
   const { conditions } = item;
   return (
     <div className="dashboard-attention-row" data-testid={`attention-item-${item.id}`}>
@@ -48,8 +53,8 @@ function AttentionRow({ item }: { item: AttentionItem }) {
       <div className="dashboard-attention-details">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Link href={`/inventory?item=${item.id}`} className="dashboard-attention-item-link">{item.name}</Link>
-          <UrgencyBadge urgency={statusUrgency[item.primaryStatus]} />
-          {conditions.lowStock && item.primaryStatus !== "lowStock" ? <UrgencyBadge urgency="low" /> : null}
+          <UrgencyBadge className="dashboard-attention-status" urgency={statusUrgency[item.primaryStatus]} />
+          {conditions.lowStock && item.primaryStatus !== "lowStock" ? <UrgencyBadge className="dashboard-attention-status" urgency="low" /> : null}
         </div>
         <div className="dashboard-attention-meta">
           <span>{item.category}</span>
@@ -59,7 +64,7 @@ function AttentionRow({ item }: { item: AttentionItem }) {
           {conditions.expiringSoon && item.expiresAt ? <span>Use by {item.expiresAt}</span> : null}
         </div>
       </div>
-      <div className="dashboard-attention-action-slot" aria-label={`Actions for ${item.name}`} />
+      <div className="dashboard-attention-action-slot"><Button type="button" variant="ghost" size="sm" disabled={loading} aria-label={`Edit ${item.name}`} onClick={(event) => onEdit(item.id, event.currentTarget)}>Edit</Button></div>
     </div>
   );
 }
@@ -69,6 +74,48 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { account, demo } = useSessionAccess();
+  const scope = `${demo}:${account?.id ?? "anonymous"}`;
+  const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
+  const [editingItem, setEditingItem] = useState<InventoryItem>();
+  const [editorScope, setEditorScope] = useState(scope);
+  const [itemError, setItemError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const editSession = useRef(0);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const editTrigger = useRef<HTMLButtonElement | null>(null);
+  const attentionFilter = useRef<HTMLSelectElement | null>(null);
+  const closeEditor = () => { editSession.current++; setSelectedItemId(null); setEditingItem(undefined); setItemError(""); };
+  useEffect(() => { closeEditor(); editTrigger.current = null; }, [scope]);
+  useEffect(() => {
+    if (selectedItemId === null || editorScope !== scope) return;
+    const controller = new AbortController();
+    const session = editSession.current;
+    setItemError("");
+    void getInventoryItem(selectedItemId, { signal: controller.signal }).then((item) => {
+      if (!controller.signal.aborted && editSession.current === session && currentScope.current === scope) setEditingItem(item);
+    }).catch((failure: unknown) => {
+      if (controller.signal.aborted || editSession.current !== session || currentScope.current !== scope) return;
+      const missing = typeof failure === "object" && failure !== null && "status" in failure && failure.status === 404;
+      setItemError(missing ? "This item is no longer available. It may have been deleted or become inaccessible." : "Unable to load this item. Try again or close this dialog.");
+      refreshPantry(queryClient);
+    });
+    return () => controller.abort();
+  }, [selectedItemId, loadAttempt, editorScope, scope, queryClient]);
+  const openEditor = (id: number, button: HTMLButtonElement) => {
+    editSession.current++;
+    editTrigger.current = button;
+    setEditingItem(undefined);
+    setItemError("");
+    setEditorScope(scope);
+    setSelectedItemId(id);
+  };
+  const returnEditFocus = (event: Event) => {
+    event.preventDefault();
+    const trigger = editTrigger.current;
+    (trigger?.isConnected ? trigger : attentionFilter.current)?.focus();
+  };
   const {
     data: stats,
     isLoading: statsLoading,
@@ -100,8 +147,8 @@ export default function Dashboard() {
     [inventoryItems, utcDay],
   );
   const categories = useMemo(
-    () => ["All categories", ...new Set((inventoryItems ?? []).map((item) => item.category).sort((a, b) => a.localeCompare(b)))],
-    [inventoryItems],
+    () => ["All categories", ...new Set([...(inventoryItems ?? []).map((item) => item.category), ...(attentionCategory !== "All categories" ? [attentionCategory] : [])].sort((a, b) => a.localeCompare(b)))],
+    [inventoryItems, attentionCategory],
   );
   const filteredAttentionItems = useMemo(
     () => attentionItems.filter((item) => attentionCategory === "All categories" || item.category === attentionCategory),
@@ -111,13 +158,6 @@ export default function Dashboard() {
   const hasStockSuggestions = suggestions !== undefined && suggestions.some((suggestion) => suggestion.inventoryItemId != null && (
     suggestion.currentQuantity === 0 || (suggestion.currentQuantity > 0 && suggestion.currentQuantity <= suggestion.minThreshold)
   ));
-
-  useEffect(() => {
-    if (attentionCategory !== "All categories" && !categories.includes(attentionCategory)) {
-      setAttentionCategory("All categories");
-      setAttentionExpanded(false);
-    }
-  }, [attentionCategory, categories]);
 
   const handleGenerateShoppingList = async () => {
     const candidates = new Map<number, ReviewItem>();
@@ -208,12 +248,12 @@ export default function Dashboard() {
       </div>
 
       <Card className="dashboard-panel dashboard-attention" aria-busy={inventoryFetching && !inventoryLoading}>
-        <CardHeader className="dashboard-panel-header"><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="dashboard-panel-title">Needs attention</CardTitle><p className="dashboard-panel-description text-sm text-muted-foreground">Stock and freshness issues, most urgent first.</p></div><label className="dashboard-category-select">Category <select value={attentionCategory} onChange={(event) => { setAttentionCategory(event.target.value); setAttentionExpanded(false); }} aria-label="Filter attention by category">{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div></CardHeader>
+        <CardHeader className="dashboard-panel-header"><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="dashboard-panel-title">Needs attention</CardTitle><p className="dashboard-panel-description text-sm text-muted-foreground">Stock and freshness issues, most urgent first.</p></div><label className="dashboard-category-select">Category <select ref={attentionFilter} value={attentionCategory} onChange={(event) => { setAttentionCategory(event.target.value); setAttentionExpanded(false); }} aria-label="Filter attention by category">{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div></CardHeader>
         <CardContent className="dashboard-panel-content">
           {inventoryLoading && !inventoryItems ? <div className="space-y-3" data-testid="pantry-attention-loading" aria-label="Loading attention items">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}</div> : inventoryError && !inventoryItems ? <div className="flex flex-col items-center gap-3 py-8 text-center text-muted-foreground" role="alert"><AlertCircle className="h-10 w-10 opacity-60" /><p className="font-medium text-foreground">Needs attention could not be loaded.</p><Button variant="outline" size="sm" onClick={() => void refetchInventory()} disabled={inventoryFetching}><RefreshCw className={cn("h-4 w-4", inventoryFetching && "animate-spin")} /> Retry</Button></div> : <>
             {inventoryError && inventoryItems ? <div className="mb-3 flex items-center justify-between rounded border border-amber-200 bg-amber-50 p-3 text-sm" role="status">Refresh failed; showing the latest attention items.<Button variant="outline" size="sm" onClick={() => void refetchInventory()}>Retry</Button></div> : null}
             {attentionItems.length === 0 ? <div className="dashboard-empty text-center" data-testid="attention-healthy"><CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-primary/70" /><p className="font-medium text-foreground">Your pantry is in good shape.</p><p className="text-sm">No stock or expiry issues need attention.</p></div> : filteredAttentionItems.length === 0 ? <div className="dashboard-empty text-center" data-testid="attention-filtered-empty"><p className="font-medium text-foreground">No items in {attentionCategory} need attention</p><Button variant="link" onClick={() => { setAttentionCategory("All categories"); setAttentionExpanded(false); }}>Show all categories</Button></div> : <>
-              <div className="dashboard-attention-list" data-testid="attention-list">{visibleAttentionItems.map((item) => <AttentionRow key={item.id} item={item} />)}</div>
+              <div className="dashboard-attention-list" data-testid="attention-list">{visibleAttentionItems.map((item) => <AttentionRow key={item.id} item={item} onEdit={openEditor} loading={selectedItemId === item.id && !editingItem && !itemError} />)}</div>
               {filteredAttentionItems.length > 6 ? <Button variant="link" onClick={() => setAttentionExpanded((expanded) => !expanded)}>{attentionExpanded ? "Show fewer" : `View all ${filteredAttentionItems.length} items`}</Button> : null}
             </>}
           </>}
@@ -224,6 +264,6 @@ export default function Dashboard() {
         {suggestionsError ? <div className="mb-3 flex items-center justify-between rounded border border-amber-200 bg-amber-50 p-3 text-sm" role="alert">Shopping suggestions could not be loaded.<Button variant="outline" size="sm" onClick={() => void refetchSuggestions()} disabled={suggestionsFetching}>Retry</Button></div> : null}
         {reviewOpen ? renderReview() : suggestionsLoading ? <div className="space-y-3" aria-label="Loading shopping suggestions">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div> : <p className="text-sm text-muted-foreground">Review low-stock and out-of-stock items before creating a shopping list.</p>}
       </CardContent></Card>
-    </div></Layout>
+    </div>{selectedItemId !== null && editorScope === scope && <InventoryItemDialog key={`${scope}:${selectedItemId}`} open item={editingItem} loading={!editingItem && !itemError} loadError={itemError} onRetry={() => setLoadAttempt((value) => value + 1)} onOpenChange={(open) => { if (!open) closeEditor(); }} onCloseAutoFocus={returnEditFocus} />}</Layout>
   );
 }
