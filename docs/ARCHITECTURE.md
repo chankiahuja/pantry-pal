@@ -6,7 +6,7 @@ Account deletion is documented in the [data inventory and deletion protocol](GS-
 
 PantryPal is a React application backed by one Spring Boot service and a relational database. Spring Boot serves both the built frontend and the API on port 8080. The diagram below shows the normal full-stack runtime.
 
-The overview is divided into three smaller diagrams. Solid arrows are synchronous requests or dependencies; dashed arrows represent background refresh signals.
+The overview is divided into three focused views. Blue marks entry points, teal marks browser or refresh activity, purple marks application logic, and amber marks storage or decisions. Solid arrows are requests or dependencies; dashed arrows are background refresh signals.
 
 ### Request and storage path
 
@@ -19,6 +19,17 @@ flowchart LR
     Repo <--> DB[("H2 (local) / PostgreSQL")]
     Flyway["Flyway migrations"] --> DB
     Static["Spring serves built React assets"] -.-> UI
+
+    classDef person fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:2px
+    classDef client fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    classDef server fill:#EEF0FF,stroke:#6661C5,color:#332E72,stroke-width:1.5px
+    classDef data fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    classDef support fill:#F2F4F7,stroke:#8592A3,color:#354153,stroke-width:1px
+    class User person
+    class UI client
+    class API,Core,Repo server
+    class DB data
+    class Flyway,Static support
 ```
 
 The Spring Boot server hosts the built React app and the `/api` endpoints on port 8080. H2 is used locally unless the PostgreSQL profile is configured.
@@ -32,6 +43,13 @@ flowchart LR
     Bell["Notification bell"] -->|"Suggestions poll: 30 s"| Cache
     Stream["EventSource (SSE)"] -.->|"Invalidate queries"| Cache
     Cache <-->|"HTTP / JSON"| API["Spring REST controllers"]
+
+    classDef ui fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    classDef cache fill:#EEF0FF,stroke:#6661C5,color:#332E72,stroke-width:2px
+    classDef service fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    class Screens,Dialogs,Bell,Stream ui
+    class Cache cache
+    class API service
 ```
 
 ### Notifications and background checks
@@ -44,6 +62,13 @@ flowchart LR
     Listener -.->|"SSE refresh signal"| Browser["Browser EventSource"]
     Browser -.-> Refresh["React Query refetch"]
     Refresh -->|"Fetch current alerts"| API["Suggestions API"]
+
+    classDef trigger fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef process fill:#EEF0FF,stroke:#6661C5,color:#332E72,stroke-width:1.5px
+    classDef signal fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    class Writes,Schedule trigger
+    class Listener,Service,API process
+    class Browser,Refresh signal
 ```
 
 SSE sends refresh signals, not alert details. Notification delivery is best effort; normal HTTP responses and the bell's 30-second polling provide additional refresh paths. There is no message broker or durable notification inbox.
@@ -74,6 +99,15 @@ flowchart TD
     Check -->|No| Conflict["Explain expiry or conflict"]
     Save -.-> Refresh["Refresh dependent views"]
     Restore --> Refresh
+
+    classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    classDef failure fill:#FDEDEC,stroke:#C65656,color:#792C2C,stroke-width:1.5px
+    class Edit,Confirm action
+    class Valid,Undo,Check decision
+    class Save,Restore,Refresh success
+    class Error,Conflict failure
 ```
 
 An error keeps the user in the adjustment dialog. The server determines Undo eligibility; expiry or an intervening write never overwrites newer stock.
@@ -90,6 +124,13 @@ flowchart TD
     Buy --> Complete["Complete purchase"]
     Complete --> Restock["Restock linked inventory rows once"]
     Restock --> Refresh["Refresh inventory and dashboard"]
+
+    classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
+    classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
+    classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
+    class Dashboard,Review,List,Buy,Complete action
+    class Pick decision
+    class Restock,Refresh success
 ```
 
 Only out-of-stock and low-stock suggestions can generate shopping items; expiry-only reminders are excluded. Manual shopping rows without linked inventory are not automatically restocked.
@@ -106,6 +147,7 @@ The main transaction and the retry outcomes are split so each sequence remains r
 
 ```mermaid
 sequenceDiagram
+    autonumber
     actor User
     participant UI as React UI
     participant API as Spring API
@@ -128,6 +170,7 @@ The HTTP response and SSE signal can arrive in either order. The UI refreshes fr
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant UI as React UI
     participant API as Spring API
     participant DB as Database
