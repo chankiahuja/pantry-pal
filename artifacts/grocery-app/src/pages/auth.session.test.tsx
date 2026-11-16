@@ -476,7 +476,7 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.ok(screen.queryByText("user@example.com") === null);
   });
 
-  it("restores the same-account scope after rejected logout while preserving authentication", async () => {
+  it("retains the confirmed scope and cache after rejected logout", async () => {
     const api = new AuthApi();
     api.authenticated = true;
     api.csrf = "signed-in-token";
@@ -503,11 +503,15 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.equal(oldScope(), true);
     const cached = { stock: "Private stock" };
     client.setQueryData(["private-pantry"], cached);
+    const cacheEvents: string[] = [];
+    const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
     await act(async () => {
       const pending = access.logout();
-      assert.equal(oldScope(), false);
+      assert.equal(oldScope(), true);
       await assert.rejects(pending, error => error === failure);
     });
+    assert.deepEqual(cacheEvents, []);
+    unsubscribe();
     assert.equal(api.authenticated, true);
     assert.equal(access.account, account);
     assert.ok(screen.getByText("Protected content for user@example.com"));
@@ -525,12 +529,11 @@ describe("real email authentication", { concurrency: false }, () => {
     assert.equal(screen.queryByText("Protected content for user@example.com"), null);
   });
 
-  for (const transition of ["sign-in", "account switch", "unauthorized", "unmount", "another pending logout", "another failed logout"]) {
-    it(`does not restore a failed logout's scope after ${transition}`, async () => {
+  for (const transition of ["sign-in", "account switch", "unauthorized", "unmount"]) {
+    it(`keeps previous-account operations invalid after ${transition} and logout rejection`, async () => {
       const api = new AuthApi();
       api.authenticated = true;
       const failure = new TypeError("First logout failed");
-      const secondFailure = new TypeError("Second logout failed");
       const rejectLogouts: ((error: Error) => void)[] = [];
       globalThis.fetch = async (input, init) => {
         if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>((_resolve, reject) => { rejectLogouts.push(reject); });
@@ -550,11 +553,10 @@ describe("real email authentication", { concurrency: false }, () => {
       });
       const previousScope = access.isCurrentScope;
       let firstResult!: Promise<void>;
-      let secondResult: Promise<void> | undefined;
       await act(async () => {
         firstResult = assert.rejects(access.logout(), error => error === failure);
       });
-      assert.equal(previousScope(), false);
+      assert.equal(previousScope(), true);
       await act(async () => {
         if (transition === "sign-in" || transition === "account switch") {
           access.signedIn({ authenticated: true, account: { ...api.account, id: transition === "account switch" ? 2 : 1 }, csrfToken: "new-session-token" });
@@ -563,12 +565,6 @@ describe("real email authentication", { concurrency: false }, () => {
           await assert.rejects(getInventoryStats());
         } else if (transition === "unmount") {
           view.unmount();
-        } else {
-          secondResult = assert.rejects(access.logout(), error => error === secondFailure);
-          if (transition === "another failed logout") {
-            rejectLogouts[1]!(secondFailure);
-            await secondResult;
-          }
         }
       });
       const interveningScope = access.isCurrentScope;
@@ -585,9 +581,6 @@ describe("real email authentication", { concurrency: false }, () => {
       assert.deepEqual(cacheEvents, []);
       unsubscribe();
       if (transition === "account switch") assert.equal(access.account?.id, 2);
-      if (transition === "another pending logout") {
-        await act(async () => { rejectLogouts[1]!(secondFailure); await secondResult; });
-      }
     });
   }
 

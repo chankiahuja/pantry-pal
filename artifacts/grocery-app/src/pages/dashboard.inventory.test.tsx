@@ -63,6 +63,7 @@ const { Route, Router, Switch } = await import("wouter");
 const { memoryLocation } = await import("wouter/memory-location");
 const {
   getInventoryItem,
+  getInventoryStats,
   getGetInventoryItemQueryKey,
   getGetGrocerySuggestionsQueryKey,
   getGetInventoryStatsQueryKey,
@@ -1169,194 +1170,180 @@ describe("dashboard attention editing", () => {
     assert.equal((screen.getByTestId("button-save-item") as HTMLButtonElement).disabled, false);
   });
 
-  it("does not refresh or write a dismissed PATCH response into another account's cache", async () => {
-    const first = new GroceryApiMock();
-    first.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
-    first.inventoryPatchMode = "pending";
-    const second = new GroceryApiMock();
-    second.items = [dashboardItem(101, "Second account milk", "Dairy", 1, 2)];
-    let current = first;
-    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "first-token" };
-    let signIn!: (session: AuthSession) => void;
-    let toastTitles: unknown[] = [];
-    globalThis.fetch = async (input, init) => {
-      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
-      return current.fetch(input, init);
-    };
-    function AccountHarness() {
-      signIn = useSessionAccess().signedIn;
-      toastTitles = useToast().toasts.map((toast) => toast.title);
-      return <Dashboard />;
-    }
-    const client = createQueryClient();
-    const location = memoryLocation({ path: "/dashboard" });
-    render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><AccountHarness /></LoginGate></Router></QueryClientProvider>);
-    await edit();
-    changeInput("input-item-quantity", "0");
-    fireEvent.click(screen.getByTestId("button-save-item"));
-    await waitFor(() => assert.equal(first.inventoryUpdateBodies.length, 1));
-    fireEvent.click(screen.getByTestId("button-cancel"));
-    await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
-    current = second;
-    await act(async () => signIn({ ...session, account: { ...session.account!, id: 2 }, csrfToken: "second-token" }));
-    await screen.findByRole("button", { name: "Edit Second account milk" });
-    const beforeToasts = [...toastTitles];
-    const cacheEvents: string[] = [];
-    const unsubscribe = client.getQueryCache().subscribe((event) => { cacheEvents.push(event.type); });
-    await act(async () => { first.resolveInventoryPatch?.(); });
-    assert.equal(first.items[0]!.quantity, 0);
-    assert.deepEqual(cacheEvents, []);
-    unsubscribe();
-    assert.equal(client.getQueryData(getGetInventoryItemQueryKey(101)), undefined);
-    assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), second.items);
-    assert.deepEqual(toastTitles, beforeToasts);
-    assert.equal(screen.queryByRole("dialog"), null);
-    assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Second account milk"));
-  });
-
-  for (const patchFirst of [true, false]) {
-  it(`refreshes a dismissed save when PATCH ${patchFirst ? "resolves before" : "resolves after"} logout rejects`, async () => {
-    const api = new GroceryApiMock();
-    api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
-    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
-    let logout!: () => Promise<void>;
-    let rejectLogout!: (error: Error) => void;
-    const logoutError = new TypeError("Logout connection failed");
-    let logoutResult!: Promise<void>;
-    const requests: string[] = [];
-    let toastTitles: unknown[] = [];
-    globalThis.fetch = async (input, init) => {
-      requests.push(`${init?.method ?? "GET"} ${new URL(String(input), "http://localhost").pathname}`);
-      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
-      if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>((_resolve, reject) => { rejectLogout = reject; });
-      return api.fetch(input, init);
-    };
-    function AccountHarness() {
-      logout = useSessionAccess().logout;
-      toastTitles = useToast().toasts.map((toast) => toast.title);
-      return <Dashboard />;
-    }
-    const client = createQueryClient();
-    const location = memoryLocation({ path: "/dashboard" });
-    render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><AccountHarness /></LoginGate></Router></QueryClientProvider>);
-    await screen.findByRole("button", { name: "Edit Milk" }, { timeout: 5000 });
-    await act(async () => { await client.fetchQuery({ queryKey: getGetInventoryItemQueryKey(101), queryFn: () => getInventoryItem(101) }); });
-    await edit();
-    api.inventoryPatchMode = "pending";
-    changeInput("input-item-quantity", "0");
-    fireEvent.click(screen.getByTestId("button-save-item"));
-    await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
-    fireEvent.click(screen.getByTestId("button-cancel"));
-    await act(async () => { logoutResult = assert.rejects(logout(), error => error === logoutError); });
-    const beforeToasts = [...toastTitles];
-    const beforeRequests = requests.length;
-    const invalidated: unknown[] = [];
-    const cacheEvents: string[] = [];
-    const unsubscribe = client.getQueryCache().subscribe((event) => {
-      cacheEvents.push(event.type);
-      if (event.type === "updated" && event.action.type === "invalidate") invalidated.push(event.query.queryKey);
-    });
-    if (patchFirst) {
-      await act(async () => { api.resolveInventoryPatch?.(); });
-      assert.equal(api.items[0]!.quantity, 0);
-      assert.deepEqual(cacheEvents, []);
-      assert.equal((client.getQueryData(getGetInventoryItemQueryKey(101)) as InventoryItem).quantity, 1);
-      assert.equal((client.getQueryData(getListInventoryItemsQueryKey()) as InventoryItem[])[0]!.quantity, 1);
-      assert.equal(screen.getByTestId("stat-low-stock").textContent, "1");
-    }
-    await act(async () => { rejectLogout(logoutError); await logoutResult; });
-    assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
-    if (!patchFirst) await act(async () => { api.resolveInventoryPatch?.(); });
-    await waitFor(() => {
-      for (const key of [getListInventoryItemsQueryKey(), getGetInventoryStatsQueryKey(), getGetGrocerySuggestionsQueryKey(), getGetInventoryItemQueryKey(101)]) {
-        assert.ok(invalidated.some((value) => JSON.stringify(value) === JSON.stringify(key)), JSON.stringify(key));
+  for (const transition of ["account switch", "401"]) {
+    it("blocks a previous-account PATCH response after " + transition, async () => {
+      const first = new GroceryApiMock();
+      first.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
+      first.inventoryPatchMode = "pending";
+      const second = new GroceryApiMock();
+      second.items = [dashboardItem(101, "Second account milk", "Dairy", 1, 2)];
+      let current = first;
+      const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "first-token" };
+      let currentSession = session;
+      let unauthorized = false;
+      let signIn!: (session: AuthSession) => void;
+      let toastTitles: unknown[] = [];
+      globalThis.fetch = async (input, init) => {
+        if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(currentSession), { headers: { "Content-Type": "application/json" } });
+        if (unauthorized && String(input).endsWith("/api/inventory/stats")) return new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } });
+        return current.fetch(input, init);
+      };
+      function AccountHarness() {
+        signIn = useSessionAccess().signedIn;
+        toastTitles = useToast().toasts.map((toast) => toast.title);
+        return <Dashboard />;
       }
-      assert.equal(api.items[0]!.quantity, 0);
-      assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
-      assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), api.items);
-      assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
-      assert.equal(screen.getByTestId("stat-out-of-stock").textContent, "1");
-      for (const path of ["/api/inventory", "/api/inventory/stats", "/api/suggestions", "/api/inventory/101"]) assert.ok(requests.slice(beforeRequests).includes(`GET ${path}`), path);
-    });
-    unsubscribe();
-    assert.deepEqual(toastTitles, beforeToasts);
-    assert.equal(screen.queryByRole("dialog"), null);
-    api.inventoryPatchMode = "normal";
-    await edit();
-    changeInput("input-item-quantity", "5");
-    fireEvent.click(screen.getByTestId("button-save-item"));
-    await waitFor(() => {
-      assert.equal(api.items[0]!.quantity, 5);
+      const client = createQueryClient();
+      const location = memoryLocation({ path: "/dashboard" });
+      render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><Switch><Route path="/dashboard"><AccountHarness /></Route><Route path="/login"><p>Signed out</p></Route></Switch></LoginGate></Router></QueryClientProvider>);
+      await edit();
+      changeInput("input-item-quantity", "0");
+      fireEvent.click(screen.getByTestId("button-save-item"));
+      await waitFor(() => assert.equal(first.inventoryUpdateBodies.length, 1));
+      fireEvent.click(screen.getByTestId("button-cancel"));
+      await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+      current = second;
+      if (transition === "account switch") {
+        currentSession = { ...session, account: { ...session.account!, id: 2 }, csrfToken: "second-token" };
+        await act(async () => signIn(currentSession));
+        await screen.findByRole("button", { name: "Edit Second account milk" });
+      } else {
+        currentSession = { authenticated: false, account: null, csrfToken: "anonymous-token" };
+        unauthorized = true;
+        await act(async () => { await assert.rejects(getInventoryStats()); });
+        await screen.findByText("Signed out");
+      }
+      const beforeToasts = [...toastTitles];
+      const cacheEvents: string[] = [];
+      const unsubscribe = client.getQueryCache().subscribe((event) => { cacheEvents.push(event.type); });
+      await act(async () => { first.resolveInventoryPatch?.(); });
+      assert.equal(first.items[0]!.quantity, 0);
+      assert.deepEqual(cacheEvents, []);
+      unsubscribe();
+      assert.equal(client.getQueryData(getGetInventoryItemQueryKey(101)), undefined);
+      assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), transition === "account switch" ? second.items : undefined);
+      assert.deepEqual(toastTitles, beforeToasts);
       assert.equal(screen.queryByRole("dialog"), null);
-      assert.equal(screen.queryByTestId("attention-item-101"), null);
-      assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
-      assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
-      assert.ok(toastTitles.includes("Milk updated."));
+      if (transition === "account switch") assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Second account milk"));
+      else assert.ok(screen.getByText("Signed out"));
     });
-  });
   }
 
-  it("blocks a save started during pending logout from repopulating the cache after logout succeeds", async () => {
-    const api = new GroceryApiMock();
-    api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
-    api.inventoryPatchMode = "pending";
-    let authenticated = true;
-    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
-    let completeLogout!: () => void;
-    let access!: ReturnType<typeof useSessionAccess>;
-    let toastTitles: unknown[] = [];
-    globalThis.fetch = async (input, init) => {
-      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
-      if (String(input).endsWith("/api/auth/logout")) return new Promise<Response>(resolve => {
-        completeLogout = () => {
-          authenticated = false;
-          resolve(new Response(JSON.stringify({ authenticated: false, account: null, csrfToken: "anonymous-token" }), { headers: { "Content-Type": "application/json" } }));
-        };
-      });
-      if (!authenticated) return new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } });
-      return api.fetch(input, init);
-    };
-    function AccountHarness() {
-      access = useSessionAccess();
-      toastTitles = useToast().toasts.map((toast) => toast.title);
-      return <Dashboard />;
+  for (const openedDuringLogout of [false, true]) {
+    for (const logoutSucceeds of [false, true]) {
+      for (const patchFirst of [true, false]) {
+        it("reconciles an editor opened " + (openedDuringLogout ? "during" : "before") + " logout when PATCH completes " + (patchFirst ? "before" : "after") + " logout " + (logoutSucceeds ? "succeeds" : "rejects"), async () => {
+          const api = new GroceryApiMock();
+          api.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
+          api.inventoryPatchMode = "pending";
+          const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "test-token" };
+          let authenticated = true;
+          const logoutError = new TypeError("Logout connection failed");
+          let finishLogout!: () => void;
+          let access!: ReturnType<typeof useSessionAccess>;
+          let logoutResult!: Promise<void>;
+          let toastTitles: unknown[] = [];
+          const requests: string[] = [];
+          globalThis.fetch = async (input, init) => {
+            const path = new URL(String(input), "http://localhost").pathname;
+            requests.push((init?.method ?? "GET") + " " + path);
+            if (path === "/api/auth/session") return new Response(JSON.stringify({ ...session, authenticated, account: authenticated ? session.account : null }), { headers: { "Content-Type": "application/json" } });
+            if (path === "/api/auth/logout") return new Promise<Response>((resolve, reject) => {
+              finishLogout = () => {
+                if (!logoutSucceeds) { reject(logoutError); return; }
+                authenticated = false;
+                resolve(new Response(JSON.stringify({ authenticated: false, account: null, csrfToken: "anonymous-token" }), { headers: { "Content-Type": "application/json" } }));
+              };
+            });
+            if (!authenticated) return new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } });
+            return api.fetch(input, init);
+          };
+          function AccountHarness() {
+            access = useSessionAccess();
+            toastTitles = useToast().toasts.map((toast) => toast.title);
+            return <Dashboard />;
+          }
+          const client = createQueryClient();
+          const location = memoryLocation({ path: "/dashboard" });
+          const tree = () => <QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><Switch><Route path="/dashboard"><AccountHarness /></Route><Route path="/login"><p>Signed out</p></Route></Switch></LoginGate></Router></QueryClientProvider>;
+          const view = render(tree());
+          await screen.findByRole("button", { name: "Edit Milk" });
+          await act(async () => { await client.fetchQuery({ queryKey: getGetInventoryItemQueryKey(101), queryFn: () => getInventoryItem(101) }); });
+          const confirmedScope = access.isCurrentScope;
+          async function startLogout() {
+            await act(async () => {
+              const pending = access.logout();
+              logoutResult = logoutSucceeds ? pending : assert.rejects(pending, error => error === logoutError);
+            });
+            // A provider render during the request must retain the confirmed scope.
+            view.rerender(tree());
+            assert.equal(confirmedScope(), true);
+            assert.equal(access.isCurrentScope(), true);
+          }
+          if (openedDuringLogout) await startLogout();
+          await edit();
+          changeInput("input-item-quantity", "0");
+          fireEvent.click(screen.getByTestId("button-save-item"));
+          await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
+          fireEvent.click(screen.getByTestId("button-cancel"));
+          if (!openedDuringLogout) await startLogout();
+          const editorScope = access.isCurrentScope;
+          const beforeToasts = [...toastTitles];
+          const beforeRequests = requests.length;
+          const invalidated: unknown[] = [];
+          const cacheEvents: string[] = [];
+          const unsubscribe = client.getQueryCache().subscribe(event => {
+            cacheEvents.push(event.type);
+            if (event.type === "updated" && event.action.type === "invalidate") invalidated.push(event.query.queryKey);
+          });
+          async function assertRefreshed() {
+            await waitFor(() => {
+              for (const key of [getListInventoryItemsQueryKey(), getGetInventoryStatsQueryKey(), getGetGrocerySuggestionsQueryKey(), getGetInventoryItemQueryKey(101)]) {
+                assert.ok(invalidated.some(value => JSON.stringify(value) === JSON.stringify(key)), JSON.stringify(key));
+              }
+              assert.deepEqual(client.getQueryData(getGetInventoryItemQueryKey(101)), api.items[0]);
+              assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), api.items);
+              assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
+              assert.equal(screen.getByTestId("stat-out-of-stock").textContent, "1");
+              for (const path of ["/api/inventory", "/api/inventory/stats", "/api/suggestions"]) assert.ok(requests.slice(beforeRequests).includes("GET " + path), path);
+            });
+          }
+          if (patchFirst) {
+            await act(async () => { api.resolveInventoryPatch?.(); });
+            await assertRefreshed();
+            assert.equal(confirmedScope(), true);
+          }
+          const eventsBeforeLogoutCompletion = cacheEvents.length;
+          await act(async () => { finishLogout(); await logoutResult; });
+          if (logoutSucceeds) {
+            await screen.findByText("Signed out");
+            assert.equal(confirmedScope(), false);
+            assert.equal(editorScope(), false);
+            assert.equal(client.getQueryCache().getAll().length, 0);
+          } else {
+            assert.equal(confirmedScope(), true);
+            assert.equal(editorScope(), true);
+            assert.equal(cacheEvents.length, eventsBeforeLogoutCompletion);
+            assert.ok(screen.getByRole("button", { name: "Account menu for First" }));
+          }
+          const eventsBeforeLateSave = cacheEvents.length;
+          if (!patchFirst) await act(async () => { api.resolveInventoryPatch?.(); });
+          assert.equal(api.items[0]!.quantity, 0);
+          if (logoutSucceeds) {
+            assert.equal(cacheEvents.length, eventsBeforeLateSave);
+            assert.equal(client.getQueryCache().getAll().length, 0);
+            assert.ok(screen.getByText("Signed out"));
+            assert.equal(screen.queryByRole("button", { name: /Account menu for/ }), null);
+          } else {
+            await assertRefreshed();
+          }
+          unsubscribe();
+          assert.equal(screen.queryByRole("dialog"), null);
+          assert.deepEqual(toastTitles, beforeToasts);
+        });
+      }
     }
-    const client = createQueryClient();
-    const location = memoryLocation({ path: "/dashboard" });
-    const tree = () => <QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><Switch><Route path="/dashboard"><AccountHarness /></Route><Route path="/login"><p>Signed out</p></Route></Switch></LoginGate></Router></QueryClientProvider>;
-    const view = render(tree());
-    await screen.findByRole("button", { name: "Edit Milk" });
-    const beforeLogoutScope = access.isCurrentScope;
-    let logoutResult!: Promise<void>;
-    await act(async () => { logoutResult = access.logout(); });
-    // A render during the request lets a newly opened editor capture the
-    // temporary logout scope, which must also be revoked on success.
-    view.rerender(tree());
-    const duringLogoutScope = access.isCurrentScope;
-    assert.equal(beforeLogoutScope(), false);
-    assert.equal(duringLogoutScope(), true);
-    await edit();
-    changeInput("input-item-quantity", "0");
-    fireEvent.click(screen.getByTestId("button-save-item"));
-    await waitFor(() => assert.equal(api.inventoryUpdateBodies.length, 1));
-    const beforeToasts = [...toastTitles];
-    await act(async () => { completeLogout(); await logoutResult; });
-    await screen.findByText("Signed out");
-    assert.equal(duringLogoutScope(), false);
-    assert.equal(client.getQueryCache().getAll().length, 0);
-    const cacheEvents: string[] = [];
-    const unsubscribe = client.getQueryCache().subscribe(event => { cacheEvents.push(event.type); });
-    await act(async () => { api.resolveInventoryPatch?.(); });
-    assert.equal(api.items[0]!.quantity, 0);
-    assert.deepEqual(cacheEvents, []);
-    unsubscribe();
-    assert.equal(client.getQueryCache().getAll().length, 0);
-    assert.ok(screen.getByText("Signed out"));
-    assert.equal(screen.queryByRole("dialog"), null);
-    assert.equal(screen.queryByRole("button", { name: /Account menu for/ }), null);
-    assert.deepEqual(toastTitles, beforeToasts);
-  });
-
+  }
   function setup(items = [dashboardItem(101, "Milk", "Dairy", 1.5, 2, -1)]) {
     const api = new MockPantryApi({ inventory: items, lists: [], applied: [], nextId: 200 });
     const patches: { id: number; body: Record<string, unknown> }[] = [];

@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { Redirect, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { getAuthSession, logoutSession, setCsrfToken, setUnauthorizedHandler, type AuthAccount, type AuthSession } from "@workspace/api-client-react";
-import { refreshPantry } from "./refresh-pantry";
 
 const PreviewAccess = createContext({ demo: false, account: null as AuthAccount | null, isCurrentScope: (): boolean => true, complete: () => {}, signedIn: (_session: AuthSession) => {}, logout: async () => {} });
 export const useSessionAccess = () => useContext(PreviewAccess);
@@ -17,13 +16,10 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
   const [account, setAccount] = useState<AuthAccount | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const [, setScopeRevision] = useState(0);
   // Scope lifetime follows authentication, rather than an individual dialog.
   // Retained callbacks cannot refresh a cache cleared for a later session.
   const scope = useRef(0);
-  // Restoring a failed attempt must not reuse a later transition's identity.
-  const nextScope = useRef(0);
-  const advanceScope = () => (scope.current = ++nextScope.current);
+  const advanceScope = () => ++scope.current;
   const scopeVersion = scope.current;
   useEffect(() => {
     advanceScope();
@@ -72,22 +68,9 @@ export function LoginGate({ children, preview = import.meta.env?.MODE === "mock"
         complete: () => { if (preview) setCompleted(true); },
         signedIn: session => { advanceScope(); setCsrfToken(session.csrfToken); client.clear(); setCompleted(session.authenticated); setAccount(session.authenticated ? session.account : null); },
         logout: async () => {
-          const previousScope = scope.current;
-          const logoutScope = advanceScope();
-          if (!preview) {
-            try {
-              const session = await logoutSession();
-              setCsrfToken(session.csrfToken);
-            } catch (error) {
-              if (scope.current === logoutScope && nextScope.current === logoutScope) {
-                scope.current = previousScope;
-                setScopeRevision(value => value + 1);
-                refreshPantry(client, undefined, { refetchItemDetails: true });
-              }
-              throw error;
-            }
-          }
+          const session = preview ? null : await logoutSession();
           advanceScope();
+          if (session) setCsrfToken(session.csrfToken);
           setCompleted(false);
           setAccount(null);
           client.clear();
