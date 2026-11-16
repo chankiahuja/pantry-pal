@@ -37,6 +37,7 @@ import { isInvalidUnit } from "@/lib/inventory-units";
 import { UnitSelector } from "@/components/unit-selector";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { refreshPantry } from "@/lib/refresh-pantry";
+import { useSessionAccess } from "@/lib/preview-access";
 
 function nullableValue(value: string | undefined) {
   return value === "" || value === undefined ? null : value;
@@ -116,6 +117,7 @@ export function InventoryItemDialog({ open, onOpenChange, item, onCloseAutoFocus
 // mounted through loading so its focus scope and return target remain stable.
 function InventoryItemEditor({ open, onOpenChange, item }: InventoryItemDialogProps) {
   const queryClient = useQueryClient();
+  const { isCurrentScope } = useSessionAccess();
   const { toast } = useToast();
   const { notifyOutOfStock } = useNotifications();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -317,7 +319,8 @@ function InventoryItemEditor({ open, onOpenChange, item }: InventoryItemDialogPr
     activeSubmission.current = submissionId;
     const isCurrentSubmission = () =>
       dialogSession.current === submissionSession &&
-      activeSubmission.current === submissionId;
+      activeSubmission.current === submissionId &&
+      (!item || isCurrentScope());
     setIsSubmitting(true);
     try {
       if (item) {
@@ -338,8 +341,8 @@ function InventoryItemEditor({ open, onOpenChange, item }: InventoryItemDialogPr
           id: item.id,
           data: update,
         });
+        if (isCurrentScope()) refreshPantry(queryClient, updatedItem);
         if (!isCurrentSubmission()) return;
-        refreshPantry(queryClient, updatedItem);
         if (isCurrentSubmission()) {
           if (updatedItem.quantity === 0) {
             notifyOutOfStock(updatedItem.name);

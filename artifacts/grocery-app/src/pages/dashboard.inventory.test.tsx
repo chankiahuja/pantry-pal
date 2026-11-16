@@ -1089,6 +1089,130 @@ describe("dashboard attention editing", () => {
     assert.equal(patches, 0);
   });
 
+  for (const quantity of [0, 5]) {
+    it(`refreshes a dismissed pending PATCH with server quantity ${quantity} without post-dismissal feedback`, async () => {
+      const { api, queryClient, patches, requests, controls } = setup();
+      let toastTitles: unknown[] = [];
+      function ToastProbe() {
+        toastTitles = useToast().toasts.map((toast) => toast.title);
+        return null;
+      }
+      render(<ToastProbe />);
+      await edit();
+      changeInput("input-item-quantity", String(quantity));
+      changeInput("input-item-expires", "");
+      controls.hold = true;
+      fireEvent.click(screen.getByTestId("button-save-item"));
+      await waitFor(() => assert.equal(patches.length, 1));
+      fireEvent.click(screen.getByTestId("button-cancel"));
+      await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+      const beforeToasts = [...toastTitles];
+      const beforeRequests = requests.length;
+      const invalidated: unknown[] = [];
+      const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+        if (event.type === "updated" && event.action.type === "invalidate") invalidated.push(event.query.queryKey);
+      });
+      // A server-normalized value proves the response, rather than the draft,
+      // supplies the detail cache and the refreshed attention row.
+      api.state.inventory[0]!.name = "Server Milk";
+      await act(async () => controls.release());
+      await waitFor(() => {
+        for (const key of [getListInventoryItemsQueryKey(), getGetInventoryStatsQueryKey(), getGetGrocerySuggestionsQueryKey(), getGetInventoryItemQueryKey(101)]) {
+          assert.ok(invalidated.some((value) => JSON.stringify(value) === JSON.stringify(key)), JSON.stringify(key));
+        }
+        for (const path of ["/api/inventory", "/api/inventory/stats", "/api/suggestions"]) assert.ok(requests.slice(beforeRequests).includes(`GET ${path}`), path);
+        assert.deepEqual(queryClient.getQueryData(getGetInventoryItemQueryKey(101)), api.state.inventory[0]);
+        assert.deepEqual(queryClient.getQueryData(getListInventoryItemsQueryKey()), api.state.inventory);
+        assert.equal(screen.getByTestId("stat-expired").textContent, "0");
+        assert.equal(screen.getByTestId("stat-low-stock").textContent, "0");
+        assert.equal(screen.getByTestId("stat-out-of-stock").textContent, quantity === 0 ? "1" : "0");
+      });
+      unsubscribe();
+      assert.equal(screen.queryByRole("dialog"), null);
+      assert.deepEqual(toastTitles, beforeToasts);
+      if (quantity === 0) assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Server Milk"));
+      else assert.equal(screen.queryByTestId("attention-item-101"), null);
+      fireEvent.click(screen.getByTestId("notification-bell"));
+      const panel = screen.getByTestId("notification-panel");
+      if (quantity === 0) await within(panel).findByRole("link", { name: "Server Milk" });
+      else await within(panel).findByText("All caught up!");
+    });
+  }
+
+  it("refreshes an older dialog's PATCH without changing the new item's draft, focus or feedback", async () => {
+    const { api, patches, controls } = setup([dashboardItem(101, "Milk", "Dairy", 1, 2), dashboardItem(102, "Rice", "Pantry", 0, 1)]);
+    let toastTitles: unknown[] = [];
+    function ToastProbe() {
+      toastTitles = useToast().toasts.map((toast) => toast.title);
+      return null;
+    }
+    render(<ToastProbe />);
+    await edit();
+    changeInput("input-item-quantity", "0");
+    controls.hold = true;
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => assert.equal(patches.length, 1));
+    fireEvent.click(screen.getByTestId("button-cancel"));
+    await edit("Rice");
+    changeInput("input-item-notes", "New item's draft");
+    const notes = screen.getByTestId("input-item-notes") as HTMLTextAreaElement;
+    notes.focus();
+    const beforeToasts = [...toastTitles];
+    await act(async () => controls.release());
+    await waitFor(() => assert.equal(screen.getByTestId("stat-out-of-stock").textContent, "2"));
+    assert.equal(api.state.inventory[0]!.quantity, 0);
+    assert.equal((screen.getByTestId("input-item-name") as HTMLInputElement).value, "Rice");
+    assert.equal(notes.value, "New item's draft");
+    assert.equal(document.activeElement, notes);
+    assert.deepEqual(toastTitles, beforeToasts);
+    assert.equal((screen.getByTestId("button-save-item") as HTMLButtonElement).disabled, false);
+  });
+
+  it("does not refresh or write a dismissed PATCH response into another account's cache", async () => {
+    const first = new GroceryApiMock();
+    first.items = [dashboardItem(101, "Milk", "Dairy", 1, 2)];
+    first.inventoryPatchMode = "pending";
+    const second = new GroceryApiMock();
+    second.items = [dashboardItem(101, "Second account milk", "Dairy", 1, 2)];
+    let current = first;
+    const session: AuthSession = { authenticated: true, account: { id: 1, email: "first@example.test", name: "First" }, csrfToken: "first-token" };
+    let signIn!: (session: AuthSession) => void;
+    let toastTitles: unknown[] = [];
+    globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith("/api/auth/session")) return new Response(JSON.stringify(session), { headers: { "Content-Type": "application/json" } });
+      return current.fetch(input, init);
+    };
+    function AccountHarness() {
+      signIn = useSessionAccess().signedIn;
+      toastTitles = useToast().toasts.map((toast) => toast.title);
+      return <Dashboard />;
+    }
+    const client = createQueryClient();
+    const location = memoryLocation({ path: "/dashboard" });
+    render(<QueryClientProvider client={client}><Router hook={location.hook}><LoginGate preview={false}><AccountHarness /></LoginGate></Router></QueryClientProvider>);
+    await edit();
+    changeInput("input-item-quantity", "0");
+    fireEvent.click(screen.getByTestId("button-save-item"));
+    await waitFor(() => assert.equal(first.inventoryUpdateBodies.length, 1));
+    fireEvent.click(screen.getByTestId("button-cancel"));
+    await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+    current = second;
+    await act(async () => signIn({ ...session, account: { ...session.account!, id: 2 }, csrfToken: "second-token" }));
+    await screen.findByRole("button", { name: "Edit Second account milk" });
+    const beforeToasts = [...toastTitles];
+    const cacheEvents: string[] = [];
+    const unsubscribe = client.getQueryCache().subscribe((event) => { cacheEvents.push(event.type); });
+    await act(async () => { first.resolveInventoryPatch?.(); });
+    assert.equal(first.items[0]!.quantity, 0);
+    assert.deepEqual(cacheEvents, []);
+    unsubscribe();
+    assert.equal(client.getQueryData(getGetInventoryItemQueryKey(101)), undefined);
+    assert.deepEqual(client.getQueryData(getListInventoryItemsQueryKey()), second.items);
+    assert.deepEqual(toastTitles, beforeToasts);
+    assert.equal(screen.queryByRole("dialog"), null);
+    assert.ok(screen.getByTestId("attention-item-101").textContent?.includes("Second account milk"));
+  });
+
   function setup(items = [dashboardItem(101, "Milk", "Dairy", 1.5, 2, -1)]) {
     const api = new MockPantryApi({ inventory: items, lists: [], applied: [], nextId: 200 });
     const patches: { id: number; body: Record<string, unknown> }[] = [];
