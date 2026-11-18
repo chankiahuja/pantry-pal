@@ -1,6 +1,6 @@
 # Shared libraries and API contracts (`lib/`)
 
-> **At a glance:** `lib/` defines PantryPal's shared API contract and generates frontend clients and validation schemas. **The running backend is Spring Boot in [`backend/`](../backend/), not `lib/db`.**
+> **At a glance:** `lib/` defines Pantry Pal's shared API contract and generates frontend clients and validation schemas. **The running backend is Spring Boot in [`backend/`](../backend/), not `lib/db`.**
 
 **Jump to:** [Architecture](#architecture-at-a-glance) · [Package responsibilities](#package-responsibilities) · [Change an API](#how-to-change-an-api) · [Safe editing rules](#safe-editing-rules)
 
