@@ -62,36 +62,36 @@ sequenceDiagram
     User->>UI: Choose Sign in or Create account
     UI->>API: POST /api/auth/code (email, intent, name for signup, CSRF)
     API->>DB: Claim IP/email request limits
-    API->>DB: Lock and replace email challenge as unusable; commit
+    API->>DB: Lock and replace email challenge as unusable, commit
     alt Login
         API-->>UI: challengeId, expiresAt, resendAt (same response for all accounts)
         Note over API,Mail: Background worker checks current challenge and account existence
         opt Existing account and current, unexpired challenge
             API->>Mail: Send six-digit login code
-            API->>DB: Activate matching challenge on success; invalidate on failure
+            API->>DB: Activate matching challenge on success, invalidate on failure
         end
         Note over API,DB: Unknown accounts get no email and cannot authenticate
     else Signup
         API->>Mail: Send six-digit signup code
         alt Delivery failed
             API->>DB: Clear hash only if this challenge is still current
-            API-->>UI: 503; request another code later
+            API-->>UI: 503, request another code later
         else Delivery succeeded
-            API->>DB: Activate only if this challenge is still current; commit
+            API->>DB: Activate only if this challenge is still current, commit
             API-->>UI: challengeId, expiresAt, resendAt
         end
     end
         User->>UI: Enter emailed code
         UI->>API: POST /api/auth/verify (email, challengeId, code, CSRF)
         API->>DB: Claim IP/email verification limits
-        API->>DB: Lock challenge; check ID, use, expiry, attempts, HMAC
-        alt Valid signup code; account absent
+        API->>DB: Lock challenge, check ID, use, expiry, attempts, HMAC
+        alt Valid signup code, account absent
             API->>DB: Consume code and create named account
-        else Valid login code; account absent
-            API->>DB: Consume code; leave accounts unchanged
-            API-->>UI: Generic 400; remain signed out
-        else Valid code; account exists
-            API->>DB: Consume code; reuse account and existing name
+        else Valid login code, account absent
+            API->>DB: Consume code, leave accounts unchanged
+            API-->>UI: Generic 400, remain signed out
+        else Valid code, account exists
+            API->>DB: Consume code, reuse account and existing name
         end
         opt Account available
             API->>DB: Rotate and persist authenticated session
@@ -137,6 +137,6 @@ Default server limits are 20 code requests per IP per hour, 5 per email per hour
 - Request and verification use a row lock on the email challenge. Code consumption and account creation occur in one transaction. Expected verification errors commit failed-attempt counts and consumed unknown-account login challenges; unexpected database errors roll back.
 - SMTP runs outside database transactions. A reserved challenge is unusable until delivery succeeds. Activation and failure cleanup match the challenge ID, so completion of an older delivery cannot change a newer resend or revive a consumed code. A process failure during delivery leaves the reservation unusable; the user can request a new code after the cooldown.
 - Login and sign-up share the same code-request response shape. Signup acknowledges synchronous delivery; login acknowledges queued processing without confirming delivery or membership. The worker skips stale or expired tasks before SMTP; activation and failure cleanup remain challenge-scoped. The decision to create an account occurs only after code verification, using the stored challenge intent.
-- Email authentication creates and verifies accounts; pantry and shopping access is scoped to the signed-in account. Household sharing is separate. Signup does not claim unowned legacy rows; operators must verify ownership before assigning them. See the [legacy data claim procedure](./ENVIRONMENT.md#claiming-legacy-shared-pantry-data).
+- Email authentication creates and verifies accounts; pantry and shopping access is scoped to the signed-in account. Household sharing is separate. Signup does not claim unowned legacy rows; operators must verify ownership before assigning them. See the [legacy data claim procedure](./ENVIRONMENT-DETAILED-REFERENCE.md#claiming-legacy-shared-pantry-data).
 
 For the API request and response schema, see [OpenAPI](../lib/api-spec/openapi.yaml). For the wider application flow, see [architecture](./ARCHITECTURE.md).
