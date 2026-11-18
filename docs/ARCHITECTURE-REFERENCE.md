@@ -66,8 +66,9 @@ flowchart LR
 flowchart LR
     Writes["Committed pantry changes"] -.-> Listener["After-commit event listener"]
     Schedule["Stock / expiry scheduler"] --> Service["Pantry suggestions"]
-    Service -.-> Listener
-    Listener -.->|"SSE refresh signal"| Browser["Browser EventSource"]
+    Service -->|"checkExpiry calls directly"| Broadcast["Account-scoped broadcast"]
+    Listener -.->|"Queue delivery worker"| Broadcast
+    Broadcast -.->|"SSE refresh signal"| Browser["Browser EventSource"]
     Browser -.-> Refresh["React Query refetch"]
     Refresh -->|"Fetch current alerts"| API["Suggestions API"]
 
@@ -75,7 +76,7 @@ flowchart LR
     classDef process fill:#EEF0FF,stroke:#6661C5,color:#332E72,stroke-width:1.5px
     classDef signal fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
     class Writes,Schedule trigger
-    class Listener,Service,API process
+    class Listener,Service,Broadcast,API process
     class Browser,Refresh signal
 ```
 
@@ -114,20 +115,23 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Undo["User selects Undo"] --> Check{"Within 5 minutes and no newer write?"}
+    Undo["User selects Undo"] --> Applied{"Undo already applied?"}
+    Applied -->|Yes| Already["Return already_undone and current inventory"]
+    Applied -->|No| Check{"Within 5 minutes and no newer write?"}
     Check -->|Yes| Restore["Restore quantity once"] --> Refresh["Refresh views"]
     Check -->|No| Conflict["Explain conflict / expiry"]
+    Already --> Refresh
     classDef action fill:#EAF2FF,stroke:#3B82F6,color:#163A6B,stroke-width:1.5px
     classDef decision fill:#FFF4DC,stroke:#C68A25,color:#6D4615,stroke-width:1.5px
     classDef success fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
     classDef failure fill:#FDEDEC,stroke:#C65656,color:#792C2C,stroke-width:1.5px
     class Undo action
-    class Check decision
-    class Restore,Refresh success
+    class Applied,Check decision
+    class Already,Restore,Refresh success
     class Conflict failure
 ```
 
-Invalid adjustments keep the user in the dialog. A successful adjustment refreshes dependent views whether or not the user chooses Undo. The server authoritatively checks expiry and intervening writes, so Undo cannot overwrite newer stock.
+Invalid adjustments keep the user in the dialog. A successful adjustment refreshes dependent views whether or not the user chooses Undo. For a first Undo, the server checks expiry and intervening writes so it cannot overwrite newer stock. An already-completed Undo returns `already_undone` and current inventory before those checks, without another write.
 
 ### Generate a shopping list
 
@@ -176,19 +180,25 @@ sequenceDiagram
     participant UI as React UI
     participant API as Spring API
     participant DB as Database
-    participant SSE as Event listener
+    participant Listener as After-commit listener
+    participant Worker as Delivery worker
 
     User->>UI: Consume / Restock
     UI->>API: POST adjustment (Idempotency-Key)
     API->>DB: Lock row, validate and record adjustment
     DB-->>API: Transaction committed
-    API-->>UI: Confirmed inventory
-    API-->>SSE: After-commit PantryChanged
-    SSE-->>UI: SSE inventory_changed signal
-    UI->>UI: Refetch dependent queries, show Undo
+    API->>Listener: After-commit PantryChanged
+    Listener->>Worker: Enqueue account-scoped refresh
+    par HTTP response path
+        API-->>UI: Confirmed inventory
+        UI->>UI: Refetch dependent queries, show Undo
+    and Independent queued SSE delivery
+        Worker-->>UI: SSE inventory_changed signal
+        UI->>UI: Invalidate and refetch queries
+    end
 ```
 
-The HTTP response and SSE signal can arrive in either order. The UI refreshes from the response even if SSE is unavailable; the notification bell also polls suggestions.
+The after-commit listener enqueues delivery before the service transaction returns. The queued SSE delivery and HTTP response can arrive at the browser in either order. The UI refreshes from the response even if SSE is unavailable; the notification bell also polls suggestions.
 
 ### Idempotency and failure handling
 
@@ -240,7 +250,7 @@ This section summarizes the runtime rules. For low-level behavior, HTTP error co
 | Notifications | Committed changes trigger account-scoped SSE refresh signals; delivery is best effort, with HTTP/polling fallback |
 | Stock and expiry | UTC-based alert rules; expiry-only alerts do not create shopping items |
 | Purchases | Linked rows restock once per completed purchase; unlinked rows do not create inventory |
-| Adjustments and Undo | Idempotency keys, row locking, internal revisions and a five-minute Undo window; later writes prevent Undo |
+| Adjustments and Undo | Idempotency keys, row locking, internal revisions and a five-minute window for the first Undo; later writes prevent first application, while completed retries return `already_undone` without another write |
 | API contracts | OpenAPI defines the contract and generates the frontend client, not the Java implementation |
 
 ### Where to find details
