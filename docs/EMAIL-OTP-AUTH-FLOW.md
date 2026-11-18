@@ -1,6 +1,6 @@
 # Email OTP authentication flow
 
-> **Quick read:** Normal PantryPal login and signup use server-verified six-digit email codes, an HttpOnly session cookie, and CSRF protection. This guide describes the user-visible flow and key failure cases. The [detailed OTP reference](EMAIL-OTP-AUTH-REFERENCE.md) preserves the complete sequences, transaction safeguards and implementation notes.
+> **Quick read:** Normal Pantry Pal login and signup use server-verified six-digit email codes, an HttpOnly session cookie, and CSRF protection. This guide describes the user-visible flow and key failure cases. The [detailed OTP reference](EMAIL-OTP-AUTH-REFERENCE.md) preserves the complete sequences, transaction safeguards and implementation notes.
 
 **Read next:** [Normal flow](#normal-flow) · [Login versus signup](#login-versus-signup) · [Failures and recovery](#failures-and-recovery) · [Security guarantees](#security-guarantees)
 
@@ -20,8 +20,15 @@ sequenceDiagram
     User->>UI: Enter email and signup name if needed
     UI->>API: POST /api/auth/code with CSRF
     API->>DB: Reserve challenge and check limits
-    API-->>UI: Challenge ID and deadlines
-    API->>Mail: Send signup code or queue login delivery
+    alt Signup
+        API->>Mail: Send signup code synchronously
+        API-->>UI: Challenge ID and deadlines after successful delivery
+    else Login
+        API->>API: Enqueue background delivery
+        API-->>UI: Generic challenge ID and deadlines
+        Note over API,Mail: Worker checks account and current challenge
+        API->>Mail: Send login code only when eligible
+    end
     Mail-->>User: Email with six-digit code when eligible
     User->>UI: Enter code
     UI->>API: POST /api/auth/verify with CSRF
@@ -30,7 +37,7 @@ sequenceDiagram
     UI-->>User: Open dashboard
 ```
 
-**Timing note:** Signup sends synchronously and acknowledges delivery outcome. Login acknowledges a queued request and **does not confirm that an account exists or that email was delivered**; its background worker sends only for an eligible existing account. The sequence above describes the typical successful outcome, not guaranteed message order.
+**Timing note:** Signup sends synchronously and acknowledges delivery outcome. Login acknowledges a queued request and **does not confirm that an account exists or that email was delivered**; its background worker sends only for an eligible existing account. The sequence above describes the typical successful outcome, not a guarantee of email arrival or successful delivery.
 
 ## Login versus signup
 
