@@ -1,6 +1,6 @@
 # Environment and local development
 
-> **Start here:** Run PantryPal locally with Spring Boot + H2, Docker Compose + PostgreSQL, or the browser-only demo. Advanced operational procedures are preserved in the [detailed environment reference](ENVIRONMENT-DETAILED-REFERENCE.md).
+> **Start here:** Run Pantry Pal locally with Spring Boot + H2, Docker Compose + PostgreSQL, or the browser-only demo. Advanced operational procedures are preserved in the [detailed environment reference](ENVIRONMENT-DETAILED-REFERENCE.md).
 
 **Quick links:** [Run locally](#run-locally) · [Configuration](#configuration-at-a-glance) · [Deployment boundaries](#deployment-boundaries) · [Troubleshooting](#troubleshooting)
 
