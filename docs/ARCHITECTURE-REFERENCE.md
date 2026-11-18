@@ -12,7 +12,7 @@ Account deletion is documented in the [data inventory and deletion protocol](GS-
 
 ## Application overview
 
-PantryPal is a React application backed by one Spring Boot service and a relational database. Spring Boot serves both the built frontend and the API on port 8080. The diagram below shows the normal full-stack runtime.
+Pantry Pal is a React application backed by one Spring Boot service and a relational database. Spring Boot serves both the built frontend and the API on port 8080. The diagram below shows the normal full-stack runtime.
 
 The overview is divided into three focused views. Blue marks entry points, teal marks browser or refresh activity, purple marks application logic, and amber marks storage or decisions. Solid arrows are requests or dependencies; dashed arrows are background refresh signals.
 
