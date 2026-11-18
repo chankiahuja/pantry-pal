@@ -56,8 +56,9 @@ The browser uses React Query to cache API responses. Inventory actions, the dash
 flowchart LR
     Writes["Committed pantry changes"] -.-> Listener["After-commit event listener"]
     Schedule["Stock / expiry scheduler"] --> Service["Pantry suggestions"]
-    Service -.-> Listener
-    Listener -.->|"SSE refresh signal"| Browser["Browser EventSource"]
+    Service -->|"checkExpiry calls directly"| Broadcast["Account-scoped broadcast"]
+    Listener -.->|"Queue delivery worker"| Broadcast
+    Broadcast -.->|"SSE refresh signal"| Browser["Browser EventSource"]
     Browser -.-> Refresh["React Query refetch"]
     Refresh -->|"Fetch current alerts"| API["Suggestions API"]
 
@@ -65,7 +66,7 @@ flowchart LR
     classDef process fill:#EEF0FF,stroke:#6661C5,color:#332E72,stroke-width:1.5px
     classDef signal fill:#E8F7F3,stroke:#138A72,color:#124D41,stroke-width:1.5px
     class Writes,Schedule trigger
-    class Listener,Service,API process
+    class Listener,Service,Broadcast,API process
     class Browser,Refresh signal
 ```
 
@@ -100,7 +101,7 @@ flowchart LR
 
 The server validates changes and commits stock adjustments atomically. The adjustment's idempotency key prevents duplicate application of the same request.
 
-**Undo:** Available only within five minutes and only if no intervening inventory write occurred. See the [Undo eligibility diagram](ARCHITECTURE-REFERENCE.md#undo-eligibility) and [implementation details](ARCHITECTURE-REFERENCE.md#runtime-modes-and-implementation-details).
+**Undo:** A first Undo is available only within five minutes and only if no intervening inventory write occurred. Retrying an already-completed Undo returns `already_undone` and current inventory without another stock change, before expiry/revision eligibility checks. See the [Undo eligibility diagram](ARCHITECTURE-REFERENCE.md#undo-eligibility) and [implementation details](ARCHITECTURE-REFERENCE.md#runtime-modes-and-implementation-details).
 
 ### Generate a shopping list
 
@@ -118,7 +119,7 @@ flowchart LR
     class List success
 ```
 
-Shopping suggestions use **out-of-stock and low-stock** conditions; expiry-only reminders do not automatically generate shopping items. The server revalidates selected items before list creation.
+The suggestions feed includes stock and expiry attention. Generated shopping lists use only **out-of-stock and low-stock** conditions; expiry-only reminders are excluded from list generation. The server revalidates selected items before list creation.
 
 ### Complete a purchase
 
@@ -132,7 +133,8 @@ A completed purchase restocks linked inventory rows **once**, in a single transa
 | Same request key and same payload | Return current inventory without applying another adjustment |
 | Same key with different payload | Reject without changing stock |
 | Transaction rollback | Preserve stock and history; no after-commit event |
-| Successful Undo | Restore previous quantity only after expiry and revision checks |
+| First successful Undo | Restore previous quantity only after expiry and revision checks |
+| Retry of completed Undo | Return `already_undone` and current inventory without another write, before expiry/revision checks |
 | HTTP and SSE arrive in either order | UI must not assume notification ordering |
 
 For request-by-request timing, see the [successful adjustment sequence](ARCHITECTURE-REFERENCE.md#successful-adjustment-and-refresh) and [idempotency/failure diagram](ARCHITECTURE-REFERENCE.md#idempotency-and-failure-handling).
