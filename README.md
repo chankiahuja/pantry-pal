@@ -1,8 +1,8 @@
-# PantryPal
+# Pantry Pal
 
 Keep track of what you have, what needs using soon, and what to buy next.
 
-PantryPal brings inventory, expiry reminders and shopping lists together. Add your essentials, record stock changes, and review shortages before your next shop. When a purchase is complete, items linked to your inventory can be restocked without applying the same purchase twice.
+Pantry Pal brings inventory, expiry reminders and shopping lists together. Add your essentials, record stock changes, and review shortages before your next shop. When a purchase is complete, items linked to your inventory can be restocked without applying the same purchase twice.
 
 This is an actively developed portfolio project. The current deployed environment is **staging on `GS-134`**; production launch is deferred. The application is free to use at this stage, with no subscription implemented.
 
