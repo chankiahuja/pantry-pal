@@ -17,7 +17,7 @@ This is an actively developed portfolio project. The current deployed environmen
 - **Manage your account:** sign out or delete your account after recent email verification.
 - **Send feedback:** use the contact form when the environment's support mailbox and mail transport are configured.
 
-Expiry and stock conditions can overlap. The primary alert follows this order: **Expired → Out of Stock → Expiring Soon → Low Stock**. Other applicable conditions remain available; expiry-only reminders do not create shopping suggestions. See the [architecture and workflow guide](docs/ARCHITECTURE.md) for how these pieces fit together.
+Expiry and stock conditions can overlap. The primary alert follows this order: **Expired → Out of Stock → Expiring Soon → Low Stock**. Other applicable conditions remain available. The suggestions feed includes expiry-only reminders, but generated shopping lists include only items that are out of stock or at/below their minimum threshold. See the [architecture and workflow guide](docs/ARCHITECTURE.md) for how these pieces fit together.
 
 ## Current scope
 
