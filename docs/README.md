@@ -1,4 +1,4 @@
-# PantryPal documentation index
+# Pantry Pal documentation index
 
 > **Start here:** [Project README](../README.md) → [System architecture](ARCHITECTURE.md) → [Environment setup](ENVIRONMENT.md). Documents labeled **historical evidence** report specific past revisions or test runs; they are not current acceptance claims.
 
@@ -6,7 +6,7 @@
 
 | Your goal | Start with | Status |
 | --- | --- | --- |
-| Understand PantryPal's features and limitations | [Project README](../README.md) | Current project overview |
+| Understand Pantry Pal's features and limitations | [Project README](../README.md) | Current project overview |
 | Understand components and data flow | [Architecture](ARCHITECTURE.md) | Current quick guide |
 | Configure local development | [Environment](ENVIRONMENT.md) | Current quick guide |
 | Understand email OTP authentication | [Email OTP flow](EMAIL-OTP-AUTH-FLOW.md) | Current quick guide |
