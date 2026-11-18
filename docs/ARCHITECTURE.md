@@ -1,6 +1,6 @@
 # Architecture
 
-> **Quick read:** PantryPal is a React/TypeScript frontend served by a single Spring Boot application. Spring Boot owns the authenticated REST API, business rules and database transactions. PostgreSQL is used for staging; the default local runtime uses file-backed H2.
+> **Quick read:** Pantry Pal is a React/TypeScript frontend served by a single Spring Boot application. Spring Boot owns the authenticated REST API, business rules and database transactions. PostgreSQL is used for staging; the default local runtime uses file-backed H2.
 
 **Start here:** [System overview](#application-overview) · [Workflows](#pantry-and-shopping-workflow) · [Transaction guarantees](#adjustment-transaction-and-refresh-sequence) · [Technical reference](ARCHITECTURE-REFERENCE.md)
 
