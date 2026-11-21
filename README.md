@@ -6,6 +6,14 @@ Pantry Pal brings inventory, expiry reminders and shopping lists together. Add y
 
 This is an actively developed portfolio project. The current deployed environment is **staging on `GS-134`**; production launch is deferred. The application is free to use at this stage, with no subscription implemented.
 
+## Demo
+
+[![Watch the narrated Pantry Pal staging demo](docs/demo/preview.jpg)](docs/demo/pantrypal-staging-demo.mp4)
+
+[Watch or download the staging walkthrough (3m 32s)](docs/demo/pantrypal-staging-demo.mp4). It covers alert priorities and unread indicators, Consume and Undo, shopping-list creation and renaming, purchase restocking, and illustrative retailer comparisons.
+
+This is a narrated sequence of real staging screen captures, not a production release or continuous screen recording. Email reminders are described as planned; retailer prices use a fixed sample basket. See the [demo notes and captions](docs/demo/README.md).
+
 ## What you can do
 
 - **Manage inventory:** record categories, quantities, preset or custom units, minimum thresholds, optional expiry dates and notes.
