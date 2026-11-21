@@ -1,0 +1,71 @@
+1
+00:00:00,000 --> 00:00:13,000
+Inventory, freshness and shopping in one place.
+
+2
+00:00:13,000 --> 00:00:26,000
+10 items. Stock and freshness at a glance.
+
+3
+00:00:26,000 --> 00:00:42,000
+Expiring Soon appears ahead of Low Stock.
+
+4
+00:00:42,000 --> 00:01:03,000
+Email reminders for items needing attention are planned.
+
+5
+00:01:03,000 --> 00:01:13,000
+Search, categories, units, thresholds and expiry dates.
+
+6
+00:01:13,000 --> 00:01:21,000
+Rice starts with 2 kg on hand.
+
+7
+00:01:21,000 --> 00:01:30,000
+Consume 0.5 kg of rice.
+
+8
+00:01:30,000 --> 00:01:39,000
+Rice changes from 2 kg to 1.5 kg.
+
+9
+00:01:39,000 --> 00:01:48,000
+Undo restores rice to 2 kg.
+
+10
+00:01:48,000 --> 00:02:03,000
+Review quantities before creating the shopping list.
+
+11
+00:02:03,000 --> 00:02:11,000
+Keep one shortage for this demonstration.
+
+12
+00:02:11,000 --> 00:02:20,000
+Rename it: Demo - Weekend essentials.
+
+13
+00:02:20,000 --> 00:02:30,000
+Linked items retain their inventory unit.
+
+14
+00:02:30,000 --> 00:02:38,000
+1 of 1 items purchased.
+
+15
+00:02:38,000 --> 00:02:47,000
+Purchased linked items restock inventory.
+
+16
+00:02:47,000 --> 00:02:58,000
+Dish soap: 0 pieces becomes 1 piece.
+
+17
+00:02:58,000 --> 00:03:18,000
+Price comparison uses illustrative sample quotes.
+
+18
+00:03:18,000 --> 00:03:32,000
+A portfolio project, demonstrated on free staging.
