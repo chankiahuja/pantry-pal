@@ -5,7 +5,7 @@ import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
-import org.springframework.core.env.StandardEnvironment;
+import org.springframework.mock.env.MockEnvironment;
 import java.util.HashMap;
 import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +59,33 @@ class DatasourceConfigurationTest {
     }
 
     @Test
+    void literalPasswordContainingPlaceholderSyntaxIsPreserved() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "spring.datasource.username", "direct-user",
+            "spring.datasource.password", "literal-${token}-password"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getPassword()).isEqualTo("literal-${token}-password");
+        dataSource.close();
+    }
+
+    @Test
+    void missingCredentialsFailWithoutExposingSecretValues() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "DB_HOST", "render.example.test", "DB_PORT", "5432", "DB_NAME", "pantrypal"));
+
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() ->
+            new ProductionDatasourceConfiguration().productionDataSource(environment)))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("spring.datasource.username is required for the production PostgreSQL datasource.")
+            .hasMessageNotContaining("password")
+            .hasMessageNotContaining("render");
+    }
+
+    @Test
     void legacyRenderCredentialMappingsRemainEffective() throws Exception {
         var environment = productionEnvironment(Map.of(
             "DB_HOST", "render.example.test",
@@ -91,7 +118,7 @@ class DatasourceConfigurationTest {
 
     @Test
     void commandLineSpringDatasourceUrlRemainsAnExplicitOverride() {
-        var environment = new StandardEnvironment();
+        var environment = new MockEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test", Map.of(
             "spring.datasource.url", "jdbc:postgresql://operator.example.test/pantrypal?sslmode=require")));
 
@@ -124,7 +151,7 @@ class DatasourceConfigurationTest {
     void localProfileKeepsFileBackedH2() throws Exception {
         var loader = new YamlPropertySourceLoader();
         var source = loader.load("local", new ClassPathResource("application-local.yml")).get(0);
-        var environment = new StandardEnvironment();
+        var environment = new MockEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test", Map.of("PANTRYPAL_DATA_DIR", "target/test-data")));
         environment.getPropertySources().addLast(source);
 
@@ -146,7 +173,7 @@ class DatasourceConfigurationTest {
     private ConfigurableEnvironment productionEnvironment(Map<String, String> properties) throws Exception {
         var loader = new YamlPropertySourceLoader();
         var source = loader.load("production", new ClassPathResource("application-production.yml")).get(0);
-        var environment = new StandardEnvironment();
+        var environment = new MockEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("test", new HashMap<>(properties)));
         environment.getPropertySources().addLast(source);
         return environment;

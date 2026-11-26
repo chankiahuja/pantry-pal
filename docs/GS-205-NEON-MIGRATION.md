@@ -27,10 +27,10 @@ Flyway remains enabled with the existing versioned migrations. It validates and 
 
 ## Before cutover
 
-1. Confirm the staging service is on the accepted `GS-205` revision and record the current Render database name, PostgreSQL major version, region, size, expiry date, and the effective `DB_*` variable names. Re-check current Neon Free quotas, region, SSL behavior and Render outbound connectivity.
+1. Confirm the staging service is on the accepted `GS-205` revision and record the current Render database name, PostgreSQL major version, region, size, expiry date, and the effective `DB_*` variable names. Confirm that the Render expiry date covers the planned migration and rollback window; if it does not, document the recovery plan before cutover. Re-check current Neon Free quotas, region, SSL behavior and Render outbound connectivity.
 2. Create a Neon project on the Free plan in a region near the Render web service. Create/select the target database and role. Keep the direct endpoint and credentials in an approved password manager or protected local environment only.
 3. Schedule a short staging write freeze. Stop or pause the staging web service during the final export so writes cannot occur after the backup point.
-4. Install PostgreSQL client tools compatible with the source server major version. Load both connection URLs from an approved password manager or use the masked prompt below. The values remain available to the commands in the same PowerShell session, but are never printed:
+4. Install PostgreSQL client tools compatible with the source server major version. Use password-free libpq URLs and a protected `PGPASSFILE`; never put a password in a connection string or process argument. Keep the Render and Neon URLs separate and use Neon’s direct/unpooled endpoint for the migration:
 
 ```powershell
 function Read-SecretText([string] $Prompt) {
@@ -43,34 +43,107 @@ function Read-SecretText([string] $Prompt) {
     }
 }
 
-$env:RENDER_DATABASE_URL = Read-SecretText 'Render PostgreSQL URL (paste from password manager)'
-$env:NEON_DATABASE_URL = Read-SecretText 'Neon PostgreSQL URL (paste from password manager)'
+$env:RENDER_DATABASE_URL = Read-Host 'Password-free Render URL (for example postgresql://render_user@render-host:5432/pantrypal?sslmode=require)'
+$env:NEON_DATABASE_URL = Read-Host 'Password-free Neon direct URL (for example postgresql://neon_user@ep-example.us-east-2.aws.neon.tech:5432/pantrypal?sslmode=require)'
+$renderPassword = Read-SecretText 'Render database password (from password manager)'
+$neonPassword = Read-SecretText 'Neon database password (from password manager)'
+
+$renderUri = [Uri] $env:RENDER_DATABASE_URL
+$neonUri = [Uri] $env:NEON_DATABASE_URL
+$renderDatabase = $renderUri.AbsolutePath.TrimStart('/')
+$neonDatabase = $neonUri.AbsolutePath.TrimStart('/')
+$renderUser = [Uri]::UnescapeDataString($renderUri.UserInfo)
+$neonUser = [Uri]::UnescapeDataString($neonUri.UserInfo)
+$renderPort = if ($renderUri.Port -gt 0) { $renderUri.Port } else { 5432 }
+$neonPort = if ($neonUri.Port -gt 0) { $neonUri.Port } else { 5432 }
+$env:PGPASSFILE = Join-Path $env:TEMP ('pantrypal-pgpass-' + [Guid]::NewGuid().ToString('N'))
+@(
+    ('{0}:{1}:{2}:{3}:{4}' -f $renderUri.Host, $renderPort, $renderDatabase, $renderUser, $renderPassword)
+    ('{0}:{1}:{2}:{3}:{4}' -f $neonUri.Host, $neonPort, $neonDatabase, $neonUser, $neonPassword)
+) | Set-Content -LiteralPath $env:PGPASSFILE -Encoding ascii
+Remove-Variable renderPassword, neonPassword
+
+function Clear-PantryPalMigrationSecrets {
+    $passFile = $env:PGPASSFILE
+    Remove-Item Env:RENDER_DATABASE_URL, Env:NEON_DATABASE_URL, Env:PGPASSFILE -ErrorAction SilentlyContinue
+    if ($passFile) { Remove-Item -LiteralPath $passFile -Force -ErrorAction SilentlyContinue }
+    Remove-Variable renderPassword, neonPassword -Scope 1 -ErrorAction SilentlyContinue
+}
+trap { Clear-PantryPalMigrationSecrets; throw }
 ```
 
-Do not save these values in a tracked file or paste them into command history, tickets or logs. If passwords contain URL-reserved characters, use correctly URL-encoded URLs or use libpq environment variables instead.
+The URL values contain no passwords; the password file supplies credentials to libpq for `pg_dump`, `pg_restore` and `psql`. Restrict the temporary file to the current user if required by local policy. Do not save URLs, passwords, the password file or dumps in the repository, command history, tickets or logs. If a password contains `:` or another special character, `PGPASSFILE` avoids URL-encoding it. Do not use a `PGPASSWORD` process argument or environment variable.
 
 ## Existing-data migration (default path)
 
-Run from a secure directory outside the repository, with staging writes paused. Keep the URL variables available to every command and clear them even when a command fails:
+Run from a secure directory outside the repository, with staging writes paused. This block only creates the backup and never connects to Neon:
 
 ```powershell
-try {
-    pg_dump --dbname="$env:RENDER_DATABASE_URL" --format=custom --no-owner --no-acl --file='C:\secure\pantrypal-staging.dump'
-    if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; do not restore the archive' }
-
-    pg_restore --list 'C:\secure\pantrypal-staging.dump' > 'C:\secure\pantrypal-staging.contents.txt'
-    if ($LASTEXITCODE -ne 0) { throw 'Backup listing failed' }
-
-    pg_restore --dbname="$env:NEON_DATABASE_URL" --no-owner --no-acl --exit-on-error --single-transaction --verbose 'C:\secure\pantrypal-staging.dump'
-    if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
-} finally {
-    Remove-Item Env:RENDER_DATABASE_URL, Env:NEON_DATABASE_URL -ErrorAction SilentlyContinue
-}
+pg_dump --dbname="$env:RENDER_DATABASE_URL" --format=custom --no-owner --no-acl --file='C:\secure\pantrypal-staging.dump'
+if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; do not restore the archive' }
 ```
 
-Do not print either variable or enumerate the environment while they are set. Before restoring, confirm the Neon database is empty or disposable.
+Inspect the archive before any target command:
 
-Do not restore over valuable data. Compare source and target table counts, Flyway history, sequences and representative records with `psql`; keep the results redacted. The existing isolated backup/restore drill in [GS-136](GS-136-BACKUP-RESTORE.md) is the reusable local verification tool, but it is not a substitute for validating this operator backup.
+```powershell
+pg_restore --list 'C:\secure\pantrypal-staging.dump' > 'C:\secure\pantrypal-staging.contents.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Backup listing failed' }
+```
+
+## Confirm the restore target
+
+The target must be empty or explicitly disposable. First inspect the intended Neon target, then require an explicit confirmation before restoring:
+
+```powershell
+psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT current_database(), current_user, current_schema();"
+if ($LASTEXITCODE -ne 0) { throw 'Neon target inspection failed' }
+
+$confirmation = Read-Host 'Type NEON-EMPTY-OR-DISPOSABLE to authorize restore into this exact target'
+if ($confirmation -cne 'NEON-EMPTY-OR-DISPOSABLE') { throw 'Restore cancelled; target was not confirmed' }
+```
+
+Do not restore over valuable data. Keep this confirmation block separate from the backup block so copying the backup commands cannot initiate a restore.
+
+## Restore the archive
+
+Run only after the target confirmation succeeds:
+
+```powershell
+pg_restore --dbname="$env:NEON_DATABASE_URL" --no-owner --no-acl --exit-on-error --single-transaction --verbose 'C:\secure\pantrypal-staging.dump'
+if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
+```
+
+## Compare source and target
+
+The same password-free URLs and `PGPASSFILE` remain available for both source and target checks. Run each command separately, redact output, and retain the comparison with the migration record:
+
+```powershell
+$verificationSql = @"
+SELECT 'flyway' AS check_name, version, success FROM flyway_schema_history ORDER BY installed_rank;
+SELECT 'row_counts' AS check_name, table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), true, false, '')))[1]::text::bigint AS row_count
+  FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;
+SELECT 'sequences' AS check_name, schemaname, sequencename, last_value FROM pg_sequences WHERE schemaname = 'public' ORDER BY sequencename;
+"@
+
+psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\render-verification.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Render verification failed' }
+psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\neon-verification.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Neon verification failed' }
+
+psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\render-representative-records.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Render representative-record check failed' }
+psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\neon-representative-records.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Neon representative-record check failed' }
+```
+
+After the migration and verification, clear the password file and connection variables. This cleanup is also invoked by the `trap` after a command failure:
+
+```powershell
+Clear-PantryPalMigrationSecrets
+Remove-Variable renderUri, neonUri, renderDatabase, neonDatabase, renderUser, neonUser, renderPort, neonPort, verificationSql, confirmation -ErrorAction SilentlyContinue
+```
+
+The existing isolated backup/restore drill in [GS-136](GS-136-BACKUP-RESTORE.md) is the reusable local verification tool, but it is not a substitute for validating this operator backup.
 
 ## Fresh Neon database (approval required)
 
@@ -104,16 +177,17 @@ Retain the Render database and verified backup for an agreed observation window.
 
 ## Rollback
 
-If verification fails, stop staging writes and restore the complete saved Render database configuration before restarting:
+If verification fails, do not reopen staging until the rollback decision is complete:
 
-- Remove or clear `DB_URL` so the split Render URL fallback is selected.
-- Remove or clear any direct `spring.datasource.url`, `spring.datasource.username` or `spring.datasource.password` override that points to Neon.
-- Restore the original Render `DB_USER`.
-- Restore the original Render `DB_PASSWORD`.
-- Restore `DB_HOST`, `DB_PORT` and `DB_NAME` if they were changed during cutover.
-- Leave `SPRING_PROFILES_ACTIVE=production`, `AUTH_OTP_SECRET`, `AUTH_COOKIE_SECURE` and the approved mail/support variables unchanged unless the saved pre-cutover configuration says otherwise.
+1. Freeze staging writes.
+2. Reconcile writes made only in Neon, or obtain explicit owner approval to discard them. They do not automatically exist in Render.
+3. Confirm that the Render database is reachable and that its expiry date covers the rollback and observation window. If it does not, document the recovery plan before cutover; do not assume the free database will remain available.
+4. In Render, remove or clear `DB_URL` and any direct `spring.datasource.url`, `spring.datasource.username` or `spring.datasource.password` override pointing to Neon.
+5. Restore the saved Render `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` and `DB_NAME` values. Leave `SPRING_PROFILES_ACTIVE=production`, `AUTH_OTP_SECRET`, `AUTH_COOKIE_SECURE` and approved mail/support variables unchanged unless the saved pre-cutover configuration says otherwise.
+6. Restart/redeploy and smoke-test against Render: login/OTP, representative reads, an approved write, Flyway status and the existing staging URL.
+7. Reopen staging writes only after the smoke test passes and the owner accepts the reconciled/discarded Neon-write decision.
 
-Redeploy/restart and repeat the smoke tests. Any writes made to Neon after cutover will not automatically exist in Render; reconcile or explicitly discard them before rollback. Keep both databases until the owner accepts the result.
+Keep both databases and the verified backup until the owner accepts the result. Render Free database expiry is a provider constraint; check the current expiry and recovery options before cutover.
 
 ## Safety limits
 
