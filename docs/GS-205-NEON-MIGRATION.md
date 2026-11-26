@@ -120,7 +120,9 @@ The backup step is separate from restore. Inspect the archive before invoking th
 try {
     Initialize-PantryPalMigrationSecrets
     & $backupStep
-    # Invoke the restore/verification step shown below only after reviewing the archive.
+    Write-Host 'Archive listing created at C:\secure\pantrypal-staging.contents.txt'
+    $archiveReview = Read-Host 'Type ARCHIVE-REVIEWED after inspecting the archive listing to continue'
+    if ($archiveReview -cne 'ARCHIVE-REVIEWED') { throw 'Restore cancelled; archive listing was not reviewed' }
     & $restoreAndVerifyStep
 } finally {
     Clear-PantryPalMigrationSecrets
@@ -159,26 +161,24 @@ $restoreAndVerifyStep = {
     pg_restore --dbname="$env:NEON_DATABASE_URL" --no-owner --no-acl --exit-on-error --single-transaction --verbose 'C:\secure\pantrypal-staging.dump'
     if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
 
-    $verificationSql = @"
-SELECT 'flyway' AS check_name, version, success FROM flyway_schema_history ORDER BY installed_rank;
-SELECT 'row_counts' AS check_name, table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), true, false, '')))[1]::text::bigint AS row_count
-  FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;
-SELECT 'sequences' AS check_name, schemaname, sequencename, last_value FROM pg_sequences WHERE schemaname = 'public' ORDER BY sequencename;
-"@
-
-    psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\render-verification.txt'
-    if ($LASTEXITCODE -ne 0) { throw 'Render verification failed' }
-    psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\neon-verification.txt'
-    if ($LASTEXITCODE -ne 0) { throw 'Neon verification failed' }
-
-    psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\render-representative-records.txt'
-    if ($LASTEXITCODE -ne 0) { throw 'Render representative-record check failed' }
-    psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\neon-representative-records.txt'
-    if ($LASTEXITCODE -ne 0) { throw 'Neon representative-record check failed' }
+    $verificationChecks = [ordered]@{
+        flyway = "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank;"
+        row_counts = "SELECT table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), true, false, '')))[1]::text::bigint AS row_count FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;"
+        sequences = "SELECT schemaname, sequencename, last_value FROM pg_sequences WHERE schemaname = 'public' ORDER BY sequencename;"
+        representative_records = "SELECT id FROM accounts ORDER BY id LIMIT 5;"
+    }
+    foreach ($check in $verificationChecks.GetEnumerator()) {
+        $renderOutput = "C:\secure\render-$($check.Key).txt"
+        psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $check.Value > $renderOutput
+        if ($LASTEXITCODE -ne 0) { throw "Render $($check.Key) verification failed" }
+        $neonOutput = "C:\secure\neon-$($check.Key).txt"
+        psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $check.Value > $neonOutput
+        if ($LASTEXITCODE -ne 0) { throw "Neon $($check.Key) verification failed" }
+    }
 }
 ```
 
-The invocation block above is the only documented execution path: its `try/finally` keeps the password file and both URLs available through post-restore verification, then clears them. Do not execute the restore step outside that wrapper.
+The invocation block above is the only documented execution path: its `try/finally` keeps the password file and both URLs available through archive review, target validation, restore and post-restore verification, then clears them. A blank or incorrect archive-review response stops before the restore step and still runs cleanup. Do not execute the restore step outside that wrapper.
 
 The existing isolated backup/restore drill in [GS-136](GS-136-BACKUP-RESTORE.md) is the reusable local verification tool, but it is not a substitute for validating this operator backup.
 
