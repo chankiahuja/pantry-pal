@@ -85,7 +85,15 @@ Retain the Render database and verified backup for an agreed observation window.
 
 ## Rollback
 
-If verification fails, stop staging writes, restore the saved Render datasource configuration, remove or clear the protected `DB_URL`, redeploy/restart, and repeat the smoke tests. Any writes made to Neon after cutover will not automatically exist in Render; reconcile or explicitly discard them before rollback. Keep both databases until the owner accepts the result.
+If verification fails, stop staging writes and restore the complete saved Render database configuration before restarting:
+
+- Remove or clear `DB_URL` so the split Render URL fallback is selected.
+- Restore the original Render `DB_USER`.
+- Restore the original Render `DB_PASSWORD`.
+- Restore `DB_HOST`, `DB_PORT` and `DB_NAME` if they were changed during cutover.
+- Leave `SPRING_PROFILES_ACTIVE=production`, `AUTH_OTP_SECRET`, `AUTH_COOKIE_SECURE` and the approved mail/support variables unchanged unless the saved pre-cutover configuration says otherwise.
+
+Redeploy/restart and repeat the smoke tests. Any writes made to Neon after cutover will not automatically exist in Render; reconcile or explicitly discard them before rollback. Keep both databases until the owner accepts the result.
 
 ## Safety limits
 
