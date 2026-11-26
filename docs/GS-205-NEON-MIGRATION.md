@@ -56,92 +56,129 @@ $renderUser = [Uri]::UnescapeDataString($renderUri.UserInfo)
 $neonUser = [Uri]::UnescapeDataString($neonUri.UserInfo)
 $renderPort = if ($renderUri.Port -gt 0) { $renderUri.Port } else { 5432 }
 $neonPort = if ($neonUri.Port -gt 0) { $neonUri.Port } else { 5432 }
-$env:PGPASSFILE = Join-Path $env:TEMP ('pantrypal-pgpass-' + [Guid]::NewGuid().ToString('N'))
-@(
-    ('{0}:{1}:{2}:{3}:{4}' -f $renderUri.Host, $renderPort, $renderDatabase, $renderUser, $renderPassword)
-    ('{0}:{1}:{2}:{3}:{4}' -f $neonUri.Host, $neonPort, $neonDatabase, $neonUser, $neonPassword)
-) | Set-Content -LiteralPath $env:PGPASSFILE -Encoding ascii
-Remove-Variable renderPassword, neonPassword
+$renderEndpoint = '{0}:{1}/{2}' -f $renderUri.Host, $renderPort, $renderDatabase
+$expectedNeonEndpoint = '{0}:{1}/{2}' -f $neonUri.Host, $neonPort, $neonDatabase
+if ($renderEndpoint -eq $expectedNeonEndpoint) { throw 'Render and Neon endpoints must differ' }
+if ($neonUri.Host -notlike '*.neon.tech') { throw 'The target must be the intended Neon direct endpoint' }
+
+function ConvertTo-PgpassField([string] $Value) {
+    if ($null -eq $Value) { return '' }
+    return $Value.Replace('\', '\\').Replace(':', '\:')
+}
 
 function Clear-PantryPalMigrationSecrets {
-    $passFile = $env:PGPASSFILE
-    Remove-Item Env:RENDER_DATABASE_URL, Env:NEON_DATABASE_URL, Env:PGPASSFILE -ErrorAction SilentlyContinue
-    if ($passFile) { Remove-Item -LiteralPath $passFile -Force -ErrorAction SilentlyContinue }
+    $cleanupErrors = [System.Collections.Generic.List[string]]::new()
+    $passFile = $script:PantryPalPassFile
+    foreach ($variableName in @('RENDER_DATABASE_URL', 'NEON_DATABASE_URL', 'PGPASSFILE')) {
+        try { Remove-Item "Env:$variableName" -ErrorAction Stop } catch { $cleanupErrors.Add("Could not clear $variableName") }
+    }
+    if ($passFile) {
+        try { Remove-Item -LiteralPath $passFile -Force -ErrorAction Stop } catch { $cleanupErrors.Add('Could not remove the temporary password file') }
+    }
     Remove-Variable renderPassword, neonPassword -Scope 1 -ErrorAction SilentlyContinue
+    if ($cleanupErrors.Count -gt 0) { throw ('Migration cleanup failed: ' + ($cleanupErrors -join '; ')) }
 }
-trap { Clear-PantryPalMigrationSecrets; throw }
+
+function Initialize-PantryPalMigrationSecrets {
+    try {
+        $passDirectory = Join-Path $env:LOCALAPPDATA 'PantryPal'
+        New-Item -ItemType Directory -Path $passDirectory -Force -ErrorAction Stop | Out-Null
+        $script:PantryPalPassFile = Join-Path $passDirectory ('pgpass-' + [Guid]::NewGuid().ToString('N'))
+        $passLines = @(
+            ('{0}:{1}:{2}:{3}:{4}' -f (ConvertTo-PgpassField $renderUri.Host), $renderPort, (ConvertTo-PgpassField $renderDatabase), (ConvertTo-PgpassField $renderUser), (ConvertTo-PgpassField $renderPassword))
+            ('{0}:{1}:{2}:{3}:{4}' -f (ConvertTo-PgpassField $neonUri.Host), $neonPort, (ConvertTo-PgpassField $neonDatabase), (ConvertTo-PgpassField $neonUser), (ConvertTo-PgpassField $neonPassword))
+        )
+        [System.IO.File]::WriteAllText($script:PantryPalPassFile, ($passLines -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $env:PGPASSFILE = $script:PantryPalPassFile
+    } catch {
+        throw 'Could not create the protected libpq password file; no migration command was run.'
+    } finally {
+        Remove-Variable renderPassword, neonPassword -Scope 1 -ErrorAction SilentlyContinue
+    }
+}
+
 ```
 
-The URL values contain no passwords; the password file supplies credentials to libpq for `pg_dump`, `pg_restore` and `psql`. Restrict the temporary file to the current user if required by local policy. Do not save URLs, passwords, the password file or dumps in the repository, command history, tickets or logs. If a password contains `:` or another special character, `PGPASSFILE` avoids URL-encoding it. Do not use a `PGPASSWORD` process argument or environment variable.
+The URL values contain no passwords; the password file supplies credentials to libpq for `pg_dump`, `pg_restore` and `psql`. The file is created under the current user’s `LOCALAPPDATA`, uses UTF-8 without a BOM, and escapes both `:` and `\`, preserving Unicode credentials. Do not save URLs, passwords, the password file or dumps in the repository, command history, tickets or logs. Do not use a `PGPASSWORD` process argument or environment variable. The `try/finally` must enclose setup, backup, target validation, restore and post-restore verification; if file creation, a command, or cleanup fails, stop and surface a non-secret error.
 
 ## Existing-data migration (default path)
 
 Run from a secure directory outside the repository, with staging writes paused. This block only creates the backup and never connects to Neon:
 
 ```powershell
-pg_dump --dbname="$env:RENDER_DATABASE_URL" --format=custom --no-owner --no-acl --file='C:\secure\pantrypal-staging.dump'
-if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; do not restore the archive' }
+$backupStep = {
+    pg_dump --dbname="$env:RENDER_DATABASE_URL" --format=custom --no-owner --no-acl --file='C:\secure\pantrypal-staging.dump'
+    if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; do not restore the archive' }
+    pg_restore --list 'C:\secure\pantrypal-staging.dump' > 'C:\secure\pantrypal-staging.contents.txt'
+    if ($LASTEXITCODE -ne 0) { throw 'Backup listing failed' }
+}
 ```
 
-Inspect the archive before any target command:
+The backup step is separate from restore. Inspect the archive before invoking the restore step:
 
 ```powershell
-pg_restore --list 'C:\secure\pantrypal-staging.dump' > 'C:\secure\pantrypal-staging.contents.txt'
-if ($LASTEXITCODE -ne 0) { throw 'Backup listing failed' }
+try {
+    Initialize-PantryPalMigrationSecrets
+    & $backupStep
+    # Invoke the restore/verification step shown below only after reviewing the archive.
+    & $restoreAndVerifyStep
+} finally {
+    Clear-PantryPalMigrationSecrets
+}
 ```
 
-## Confirm the restore target
+## Restore, target confirmation and verification
 
-The target must be empty or explicitly disposable. First inspect the intended Neon target, then require an explicit confirmation before restoring:
-
-```powershell
-psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT current_database(), current_user, current_schema();"
-if ($LASTEXITCODE -ne 0) { throw 'Neon target inspection failed' }
-
-$confirmation = Read-Host 'Type NEON-EMPTY-OR-DISPOSABLE to authorize restore into this exact target'
-if ($confirmation -cne 'NEON-EMPTY-OR-DISPOSABLE') { throw 'Restore cancelled; target was not confirmed' }
-```
-
-Do not restore over valuable data. Keep this confirmation block separate from the backup block so copying the backup commands cannot initiate a restore.
-
-## Restore the archive
-
-Run only after the target confirmation succeeds:
+The restore step validates the live target URL immediately before `pg_restore`. It checks that the URL is present, still matches the intended Neon direct endpoint captured during setup, differs from Render, and identifies the target. It then lists existing application objects and requires confirmation for that exact destination before restoring. A missing URL, changed/wrong destination, or nonempty target without the exact approval string throws before `pg_restore` is reached. Keep this block separate from the backup block; it cannot fall back to a default URL.
 
 ```powershell
-pg_restore --dbname="$env:NEON_DATABASE_URL" --no-owner --no-acl --exit-on-error --single-transaction --verbose 'C:\secure\pantrypal-staging.dump'
-if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
-```
+$restoreAndVerifyStep = {
+    if ([string]::IsNullOrWhiteSpace($env:NEON_DATABASE_URL)) { throw 'Neon target URL is missing; restore was not run' }
+    $restoreUri = [Uri] $env:NEON_DATABASE_URL
+    $restoreDatabase = $restoreUri.AbsolutePath.TrimStart('/')
+    $restorePort = if ($restoreUri.Port -gt 0) { $restoreUri.Port } else { 5432 }
+    $restoreEndpoint = '{0}:{1}/{2}' -f $restoreUri.Host, $restorePort, $restoreDatabase
+    if ($restoreEndpoint -ne $expectedNeonEndpoint) { throw 'Neon target changed; restore was not run' }
+    if ($restoreEndpoint -eq $renderEndpoint) { throw 'Neon target matches Render source; restore was not run' }
+    if ($restoreUri.Host -notlike '*.neon.tech') { throw 'Neon target is not the intended Neon endpoint; restore was not run' }
 
-## Compare source and target
+    $targetIdentity = psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "SELECT current_database() || '|' || current_user || '|' || current_schema() || '|' || inet_server_addr()::text;"
+    if ($LASTEXITCODE -ne 0) { throw 'Neon target inspection failed' }
+    $targetObjects = psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT LIKE 'pg_%' ORDER BY tablename;"
+    if ($LASTEXITCODE -ne 0) { throw 'Neon application-object inspection failed' }
+    Write-Host "Intended Neon target: $restoreEndpoint ($targetIdentity)"
+    if (-not [string]::IsNullOrWhiteSpace(($targetObjects -join ''))) {
+        Write-Host 'Existing application objects:'
+        $targetObjects | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Host 'Existing application objects: none'
+    }
+    $confirmation = Read-Host "Type NEON-EMPTY-OR-DISPOSABLE to authorize restore into this exact target ($restoreEndpoint)"
+    if ($confirmation -cne 'NEON-EMPTY-OR-DISPOSABLE') { throw 'Restore cancelled; target was not confirmed' }
 
-The same password-free URLs and `PGPASSFILE` remain available for both source and target checks. Run each command separately, redact output, and retain the comparison with the migration record:
+    pg_restore --dbname="$env:NEON_DATABASE_URL" --no-owner --no-acl --exit-on-error --single-transaction --verbose 'C:\secure\pantrypal-staging.dump'
+    if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
 
-```powershell
-$verificationSql = @"
+    $verificationSql = @"
 SELECT 'flyway' AS check_name, version, success FROM flyway_schema_history ORDER BY installed_rank;
 SELECT 'row_counts' AS check_name, table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), true, false, '')))[1]::text::bigint AS row_count
   FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;
 SELECT 'sequences' AS check_name, schemaname, sequencename, last_value FROM pg_sequences WHERE schemaname = 'public' ORDER BY sequencename;
 "@
 
-psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\render-verification.txt'
-if ($LASTEXITCODE -ne 0) { throw 'Render verification failed' }
-psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\neon-verification.txt'
-if ($LASTEXITCODE -ne 0) { throw 'Neon verification failed' }
+    psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\render-verification.txt'
+    if ($LASTEXITCODE -ne 0) { throw 'Render verification failed' }
+    psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c $verificationSql > 'C:\secure\neon-verification.txt'
+    if ($LASTEXITCODE -ne 0) { throw 'Neon verification failed' }
 
-psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\render-representative-records.txt'
-if ($LASTEXITCODE -ne 0) { throw 'Render representative-record check failed' }
-psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\neon-representative-records.txt'
-if ($LASTEXITCODE -ne 0) { throw 'Neon representative-record check failed' }
+    psql "$env:RENDER_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\render-representative-records.txt'
+    if ($LASTEXITCODE -ne 0) { throw 'Render representative-record check failed' }
+    psql "$env:NEON_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT id FROM accounts ORDER BY id LIMIT 5;" > 'C:\secure\neon-representative-records.txt'
+    if ($LASTEXITCODE -ne 0) { throw 'Neon representative-record check failed' }
+}
 ```
 
-After the migration and verification, clear the password file and connection variables. This cleanup is also invoked by the `trap` after a command failure:
-
-```powershell
-Clear-PantryPalMigrationSecrets
-Remove-Variable renderUri, neonUri, renderDatabase, neonDatabase, renderUser, neonUser, renderPort, neonPort, verificationSql, confirmation -ErrorAction SilentlyContinue
-```
+The invocation block above is the only documented execution path: its `try/finally` keeps the password file and both URLs available through post-restore verification, then clears them. Do not execute the restore step outside that wrapper.
 
 The existing isolated backup/restore drill in [GS-136](GS-136-BACKUP-RESTORE.md) is the reusable local verification tool, but it is not a substitute for validating this operator backup.
 

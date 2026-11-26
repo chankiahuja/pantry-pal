@@ -46,16 +46,9 @@ class ProductionDatasourceConfiguration {
     }
 
     private static String required(Environment environment, String name) {
-        String value;
-        try {
-            value = environment.getProperty(name);
-        } catch (PlaceholderResolutionException exception) {
-            value = rawProperty(environment, name);
-            if (value == null || isEntirePlaceholder(value)) {
-                throw missingProperty(name);
-            }
-        }
-        if (value == null || value.isBlank() || isUnresolvedPlaceholder(environment, value)) {
+        String rawValue = rawProperty(environment, name);
+        String value = mappedCredentialValue(environment, name, rawValue);
+        if (value == null || value.isBlank()) {
             throw missingProperty(name);
         }
         return value;
@@ -68,22 +61,26 @@ class ProductionDatasourceConfiguration {
                 if (value != null) return value.toString();
             }
         }
-        return null;
+        try {
+            return environment.getProperty(name);
+        } catch (PlaceholderResolutionException exception) {
+            return null;
+        }
+    }
+
+    private static String mappedCredentialValue(Environment environment, String name, String rawValue) {
+        if (rawValue == null) return null;
+        if ("spring.datasource.username".equals(name) && "${DB_USER}".equals(rawValue)) {
+            return rawProperty(environment, "DB_USER");
+        }
+        if ("spring.datasource.password".equals(name) && "${DB_PASSWORD}".equals(rawValue)) {
+            return rawProperty(environment, "DB_PASSWORD");
+        }
+        return rawValue;
     }
 
     private static IllegalStateException missingProperty(String name) {
         return new IllegalStateException(name + " is required for the production PostgreSQL datasource.");
     }
 
-    private static boolean isEntirePlaceholder(String value) {
-        return value.startsWith("${") && value.endsWith("}")
-            && !value.substring(2, value.length() - 1).contains("${");
-    }
-
-    private static boolean isUnresolvedPlaceholder(Environment environment, String value) {
-        if (!isEntirePlaceholder(value)) return false;
-        String placeholder = value.substring(2, value.length() - 1);
-        if (placeholder.contains(":")) return false;
-        return environment.getProperty(placeholder) == null;
-    }
 }

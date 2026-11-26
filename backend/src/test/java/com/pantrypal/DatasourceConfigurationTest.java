@@ -73,6 +73,64 @@ class DatasourceConfigurationTest {
     }
 
     @Test
+    void directPasswordThatIsOnlyAPlaceholderIsLiteralWhenReferencedPropertyIsPresent() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "spring.datasource.username", "direct-user",
+            "spring.datasource.password", "${token}",
+            "token", "resolved-value"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getPassword()).isEqualTo("${token}");
+        dataSource.close();
+    }
+
+    @Test
+    void directPasswordThatIsOnlyAPlaceholderIsLiteralWhenReferencedPropertyIsAbsent() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "spring.datasource.username", "direct-user",
+            "spring.datasource.password", "${token}"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getPassword()).isEqualTo("${token}");
+        dataSource.close();
+    }
+
+    @Test
+    void yamlPasswordMappingPreservesPlaceholderPasswordWhenReferencedPropertyIsPresent() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "DB_USER", "mapped-user",
+            "DB_PASSWORD", "${token}",
+            "token", "resolved-value"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getPassword()).isEqualTo("${token}");
+        dataSource.close();
+    }
+
+    @Test
+    void yamlPasswordMappingPreservesPlaceholderPasswordWhenReferencedPropertyIsAbsent() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "DB_USER", "mapped-user",
+            "DB_PASSWORD", "${token}"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getPassword()).isEqualTo("${token}");
+        dataSource.close();
+    }
+
+    @Test
     void missingCredentialsFailWithoutExposingSecretValues() throws Exception {
         var environment = productionEnvironment(Map.of(
             "DB_HOST", "render.example.test", "DB_PORT", "5432", "DB_NAME", "pantrypal"));
