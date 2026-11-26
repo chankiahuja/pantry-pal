@@ -24,13 +24,16 @@ services:
           name: pantrypal-staging-db
           property: database
       - key: DB_USER
-        fromDatabase:
-          name: pantrypal-staging-db
-          property: user
+        # Keep this protected so a Blueprint sync cannot replace Neon credentials.
+        # Existing Render values remain available as the split-variable fallback.
+        sync: false
       - key: DB_PASSWORD
-        fromDatabase:
-          name: pantrypal-staging-db
-          property: password
+        # Keep this protected so a Blueprint sync cannot replace Neon credentials.
+        sync: false
+      # Leave unset for the Render database fallback. When staging is migrated
+      # to Neon, enter the protected JDBC URL here; Blueprint sync will preserve it.
+      - key: DB_URL
+        sync: false
       - key: AUTH_OTP_SECRET
         generateValue: true
       - key: AUTH_COOKIE_SECURE

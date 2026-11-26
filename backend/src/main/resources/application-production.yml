@@ -3,7 +3,9 @@ server:
   forward-headers-strategy: framework
 spring:
   datasource:
-    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+    # Prefer an explicitly supplied JDBC URL (for example Neon with sslmode=require).
+    # Keep the split Render variables as the backwards-compatible fallback.
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
   mail:
