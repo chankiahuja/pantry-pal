@@ -21,8 +21,8 @@ class ProductionDatasourceConfiguration {
         return DataSourceBuilder.create()
             .type(HikariDataSource.class)
             .url(resolveUrl(environment))
-            .username(required(environment, "DB_USER"))
-            .password(required(environment, "DB_PASSWORD"))
+            .username(required(environment, "spring.datasource.username"))
+            .password(required(environment, "spring.datasource.password"))
             .build();
     }
 
@@ -44,7 +44,7 @@ class ProductionDatasourceConfiguration {
 
     private static String required(Environment environment, String name) {
         String value = environment.getProperty(name);
-        if (value == null || value.isBlank()) {
+        if (value == null || value.isBlank() || value.contains("${")) {
             throw new IllegalStateException(name + " is required for the production PostgreSQL datasource.");
         }
         return value;

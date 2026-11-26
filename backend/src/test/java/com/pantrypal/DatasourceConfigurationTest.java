@@ -3,38 +3,87 @@ package com.pantrypal;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.mock.env.MockEnvironment;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
+import java.util.HashMap;
+import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DatasourceConfigurationTest {
     @Test
     void explicitDbUrlWinsWithoutSplitVariablesAndPreservesSsl() throws Exception {
-        var environment = productionEnvironment();
-        environment.setProperty("DB_URL", "jdbc:postgresql://neon.example.test/pantrypal?sslmode=require&channelBinding=require");
+        var environment = productionEnvironment(Map.of(
+            "DB_URL", "jdbc:postgresql://neon.example.test/pantrypal?sslmode=require&channelBinding=require",
+            "spring.datasource.username", "neon-user",
+            "spring.datasource.password", "neon-password"));
 
-        assertThat(resolveDatasourceUrl(environment))
+        assertThat(ProductionDatasourceConfiguration.resolveUrl(environment))
             .isEqualTo("jdbc:postgresql://neon.example.test/pantrypal?sslmode=require&channelBinding=require");
     }
 
     @Test
-    void splitVariablesRemainTheFallback() throws Exception {
-        var environment = productionEnvironment();
-        environment.setProperty("DB_URL", "");
-        environment.setProperty("DB_HOST", "render.example.test");
-        environment.setProperty("DB_PORT", "5432");
-        environment.setProperty("DB_NAME", "pantrypal");
+    void directSpringDatasourcePropertiesWorkWithoutDbVariables() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal?sslmode=require",
+            "spring.datasource.username", "direct-user",
+            "spring.datasource.password", "direct-password"));
 
-        assertThat(ProductionDatasourceConfiguration.resolveUrl(environment))
-            .isEqualTo("jdbc:postgresql://render.example.test:5432/pantrypal");
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getJdbcUrl()).isEqualTo("jdbc:postgresql://direct.example.test/pantrypal?sslmode=require");
+        assertThat(dataSource.getUsername()).isEqualTo("direct-user");
+        assertThat(dataSource.getPassword()).isEqualTo("direct-password");
+        dataSource.close();
+    }
+
+    @Test
+    void directSpringCredentialsWinOverRenderCredentialMappings() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "DB_HOST", "render.example.test",
+            "DB_PORT", "5432",
+            "DB_NAME", "renderdb",
+            "DB_USER", "render-user",
+            "DB_PASSWORD", "render-password",
+            "spring.datasource.url", "jdbc:postgresql://direct.example.test/pantrypal",
+            "spring.datasource.username", "direct-user",
+            "spring.datasource.password", "direct-password"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getUsername()).isEqualTo("direct-user");
+        assertThat(dataSource.getPassword()).isEqualTo("direct-password");
+        dataSource.close();
+    }
+
+    @Test
+    void legacyRenderCredentialMappingsRemainEffective() throws Exception {
+        var environment = productionEnvironment(Map.of(
+            "DB_HOST", "render.example.test",
+            "DB_PORT", "5432",
+            "DB_NAME", "pantrypal",
+            "DB_USER", "render-user",
+            "DB_PASSWORD", "render-password"));
+
+        var dataSource = (com.zaxxer.hikari.HikariDataSource)
+            new ProductionDatasourceConfiguration().productionDataSource(environment);
+
+        assertThat(dataSource.getJdbcUrl()).isEqualTo("jdbc:postgresql://render.example.test:5432/pantrypal");
+        assertThat(dataSource.getUsername()).isEqualTo("render-user");
+        assertThat(dataSource.getPassword()).isEqualTo("render-password");
+        dataSource.close();
     }
 
     @Test
     void explicitDbUrlWinsWhenSplitVariablesAreAlsoPresent() throws Exception {
-        var environment = productionEnvironment();
-        environment.setProperty("DB_URL", "jdbc:postgresql://neon.example.test/pantrypal?sslmode=require");
-        environment.setProperty("DB_HOST", "render.example.test");
-        environment.setProperty("DB_PORT", "5432");
-        environment.setProperty("DB_NAME", "renderdb");
+        var environment = productionEnvironment(Map.of(
+            "DB_URL", "jdbc:postgresql://neon.example.test/pantrypal?sslmode=require",
+            "spring.datasource.url", "jdbc:postgresql://operator.example.test/pantrypal?sslmode=verify-full",
+            "DB_HOST", "render.example.test",
+            "DB_PORT", "5432",
+            "DB_NAME", "renderdb"));
 
         assertThat(ProductionDatasourceConfiguration.resolveUrl(environment))
             .isEqualTo("jdbc:postgresql://neon.example.test/pantrypal?sslmode=require");
@@ -42,19 +91,42 @@ class DatasourceConfigurationTest {
 
     @Test
     void commandLineSpringDatasourceUrlRemainsAnExplicitOverride() {
-        var environment = new MockEnvironment()
-            .withProperty("spring.datasource.url", "jdbc:postgresql://operator.example.test/pantrypal?sslmode=require");
+        var environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("test", Map.of(
+            "spring.datasource.url", "jdbc:postgresql://operator.example.test/pantrypal?sslmode=require")));
 
         assertThat(ProductionDatasourceConfiguration.resolveUrl(environment))
             .isEqualTo("jdbc:postgresql://operator.example.test/pantrypal?sslmode=require");
     }
 
     @Test
+    void unsetDbUrlUsesSplitFallback() throws Exception {
+        assertThat(ProductionDatasourceConfiguration.resolveUrl(productionEnvironment(Map.of(
+            "DB_HOST", "render.example.test", "DB_PORT", "5432", "DB_NAME", "pantrypal"))))
+            .isEqualTo("jdbc:postgresql://render.example.test:5432/pantrypal");
+    }
+
+    @Test
+    void emptyDbUrlUsesSplitFallback() throws Exception {
+        assertThat(ProductionDatasourceConfiguration.resolveUrl(productionEnvironment(Map.of(
+            "DB_URL", "", "DB_HOST", "render.example.test", "DB_PORT", "5432", "DB_NAME", "pantrypal"))))
+            .isEqualTo("jdbc:postgresql://render.example.test:5432/pantrypal");
+    }
+
+    @Test
+    void whitespaceDbUrlUsesSplitFallback() throws Exception {
+        assertThat(ProductionDatasourceConfiguration.resolveUrl(productionEnvironment(Map.of(
+            "DB_URL", "  \t", "DB_HOST", "render.example.test", "DB_PORT", "5432", "DB_NAME", "pantrypal"))))
+            .isEqualTo("jdbc:postgresql://render.example.test:5432/pantrypal");
+    }
+
+    @Test
     void localProfileKeepsFileBackedH2() throws Exception {
         var loader = new YamlPropertySourceLoader();
         var source = loader.load("local", new ClassPathResource("application-local.yml")).get(0);
-        var environment = new MockEnvironment().withProperty("PANTRYPAL_DATA_DIR", "target/test-data");
-        environment.getPropertySources().addFirst(source);
+        var environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("test", Map.of("PANTRYPAL_DATA_DIR", "target/test-data")));
+        environment.getPropertySources().addLast(source);
 
         assertThat(environment.getProperty("spring.datasource.url"))
             .isEqualTo("jdbc:h2:file:target/test-data/pantrypal;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE");
@@ -71,15 +143,12 @@ class DatasourceConfigurationTest {
         assertThat(new ClassPathResource("db/migration/V7__account_session_integrity.sql").exists()).isTrue();
     }
 
-    private MockEnvironment productionEnvironment() throws Exception {
+    private ConfigurableEnvironment productionEnvironment(Map<String, String> properties) throws Exception {
         var loader = new YamlPropertySourceLoader();
         var source = loader.load("production", new ClassPathResource("application-production.yml")).get(0);
-        var environment = new MockEnvironment();
-        environment.getPropertySources().addFirst(source);
+        var environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("test", new HashMap<>(properties)));
+        environment.getPropertySources().addLast(source);
         return environment;
-    }
-
-    private String resolveDatasourceUrl(MockEnvironment environment) {
-        return ProductionDatasourceConfiguration.resolveUrl(environment);
     }
 }

@@ -67,7 +67,7 @@ The project includes [`.env.example`](../.env.example). The root `pnpm start` sc
 
 | Group | Variables | Key rule |
 | --- | --- | --- |
-| Database | `SPRING_PROFILES_ACTIVE`, `PANTRYPAL_DATA_DIR`, `DB_URL`, `DB_USER`, `DB_PASSWORD` | H2 is default locally; PostgreSQL requires its profile; an explicit `DB_URL` takes precedence in production |
+| Database | `SPRING_PROFILES_ACTIVE`, `PANTRYPAL_DATA_DIR`, `DB_URL`, `DB_USER`, `DB_PASSWORD` | H2 is default locally; production resolves non-blank `DB_URL`, then non-blank `spring.datasource.url`, then `DB_HOST`/`DB_PORT`/`DB_NAME`; `DB_URL` may include `?sslmode=require` and its JDBC query parameters are preserved |
 | Application / Vite | `API_PORT`, `PORT`, `API_TARGET`, `BASE_PATH` | Spring defaults to 8080, Vite to 5173 |
 | Email | `MAIL_HOST`, `MAIL_PORT`, `MAIL_FROM`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_SMTP_AUTH`, `MAIL_STARTTLS` | Mailpit for local testing; authenticated external SMTP requires TLS |
 | Compose SMTP | `PANTRYPAL_SMTP_HOST`, `PANTRYPAL_SMTP_PORT` | Defaults to the Compose Mailpit service |
