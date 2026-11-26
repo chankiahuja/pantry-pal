@@ -114,20 +114,7 @@ $backupStep = {
 }
 ```
 
-The backup step is separate from restore. Inspect the archive before invoking the restore step:
-
-```powershell
-try {
-    Initialize-PantryPalMigrationSecrets
-    & $backupStep
-    Write-Host 'Archive listing created at C:\secure\pantrypal-staging.contents.txt'
-    $archiveReview = Read-Host 'Type ARCHIVE-REVIEWED after inspecting the archive listing to continue'
-    if ($archiveReview -cne 'ARCHIVE-REVIEWED') { throw 'Restore cancelled; archive listing was not reviewed' }
-    & $restoreAndVerifyStep
-} finally {
-    Clear-PantryPalMigrationSecrets
-}
-```
+The backup step is separate from restore. Define it first, then define the restore and verification step below. Do not invoke either step until both definitions have been entered.
 
 ## Restore, target confirmation and verification
 
@@ -178,7 +165,20 @@ $restoreAndVerifyStep = {
 }
 ```
 
-The invocation block above is the only documented execution path: its `try/finally` keeps the password file and both URLs available through archive review, target validation, restore and post-restore verification, then clears them. A blank or incorrect archive-review response stops before the restore step and still runs cleanup. Do not execute the restore step outside that wrapper.
+After both step definitions have been entered, run this wrapper from the same fresh PowerShell session. It keeps the password file and both URLs available through backup, archive review, target validation, restore and post-restore verification, then clears them. A blank or incorrect archive-review response stops before the restore step and still runs cleanup. Do not invoke `$restoreAndVerifyStep` outside this wrapper.
+
+```powershell
+try {
+    Initialize-PantryPalMigrationSecrets
+    & $backupStep
+    Write-Host 'Archive listing created at C:\secure\pantrypal-staging.contents.txt'
+    $archiveReview = Read-Host 'Type ARCHIVE-REVIEWED after inspecting the archive listing to continue'
+    if ($archiveReview -cne 'ARCHIVE-REVIEWED') { throw 'Restore cancelled; archive listing was not reviewed' }
+    & $restoreAndVerifyStep
+} finally {
+    Clear-PantryPalMigrationSecrets
+}
+```
 
 The existing isolated backup/restore drill in [GS-136](GS-136-BACKUP-RESTORE.md) is the reusable local verification tool, but it is not a substitute for validating this operator backup.
 
