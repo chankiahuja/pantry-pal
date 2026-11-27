@@ -19,9 +19,23 @@ function normalizeUnit(value: unknown): string | { error: string } {
   if ([...unit].length > 64) return { error: "unit must be 64 characters or fewer" };
   return unit;
 }
+export function normalizeWhatsAppNumber(value: unknown): string | { error: string } {
+  if (typeof value !== "string") return { error: "whatsappNumber is required" };
+  const trimmed = value.trim();
+  if (!trimmed) return { error: "whatsappNumber is required" };
+  if (!/^\+?[0-9 .()\-]+$/.test(trimmed)) return { error: "whatsappNumber must be a valid phone number" };
+  const international = trimmed.startsWith("+");
+  let digits = trimmed.replace(/[^0-9]/g, "");
+  if (!international && digits.length === 10) digits = `91${digits}`;
+  if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) {
+    return { error: "whatsappNumber must be a valid phone number" };
+  }
+  return `+${digits}`;
+}
 type State = {
   inventory: InventoryItem[];
   lists: ShoppingListWithItems[];
+  store?: { storeName: string | null; whatsappNumber: string | null };
   applied: number[];
   revisions?: Record<number, number>;
   adjustments?: {
@@ -91,6 +105,7 @@ export function seedState(): State {
   );
   return {
     inventory,
+    store: { storeName: null, whatsappNumber: null },
     nextId: 100,
     applied: [],
     lists: [
@@ -216,6 +231,16 @@ export class MockPantryApi {
     };
 
     if (parts[0] === "healthz") return this.json({ status: "ok" });
+    if (parts[0] === "shopping-store") {
+      if (method === "GET") return this.json(this.state.store ?? { storeName: null, whatsappNumber: null });
+      if (method === "PATCH") {
+        if (typeof body.storeName !== "string" || !body.storeName.trim()) return this.json({ error: "storeName is required" }, 400);
+        const number = normalizeWhatsAppNumber(body.whatsappNumber);
+        if (typeof number !== "string") return this.json(number, 400);
+        this.state.store = { storeName: body.storeName.trim(), whatsappNumber: number };
+        return save(this.state.store);
+      }
+    }
     if (parts[0] === "feedback") {
       if (method === "GET" && parts[1] === "config") return this.json({ supportEmail: null, responseTime: null });
       if (method === "POST") return this.json({ error: "Support is not configured in the browser demo." }, 503);

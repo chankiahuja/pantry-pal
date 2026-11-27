@@ -22,6 +22,7 @@ public class PantryService {
     static double number(Map<String,Object> row, String key) { return ((Number) row.get(key)).doubleValue(); }
     static long id(Map<String,Object> row) { return ((Number) row.get("id")).longValue(); }
     static void bad(String reason) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, reason); }
+    private static final int MAX_STORE_NAME_CODE_POINTS = 200;
     static String trimUnit(String value) {
         int start = 0;
         int end = value.length();
@@ -56,6 +57,46 @@ public class PantryService {
         if (ownerId != null && repo.query("SELECT id FROM accounts WHERE id=? FOR UPDATE", ownerId).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sign in to continue");
         }
+    }
+
+    public Map<String,Object> shoppingStore(Long ownerId) {
+        lockOwner(ownerId);
+        if (ownerId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sign in to continue");
+        return repo.one("SELECT whatsapp_store_name AS store_name, whatsapp_store_number AS whatsapp_number FROM accounts WHERE id=?", ownerId);
+    }
+
+    public Map<String,Object> updateShoppingStore(Long ownerId, Map<String,Object> body) {
+        lockOwner(ownerId);
+        if (ownerId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sign in to continue");
+        Object nameValue = body.get("storeName");
+        Object numberValue = body.get("whatsappNumber");
+        String name = requiredStoreText(nameValue, "storeName");
+        String number = requiredStoreText(numberValue, "whatsappNumber");
+        String normalizedName = name.trim();
+        if (normalizedName.codePointCount(0, normalizedName.length()) > MAX_STORE_NAME_CODE_POINTS) bad("storeName must be 200 Unicode code points or fewer");
+        String normalizedNumber = normalizeWhatsAppNumber(number);
+        repo.execute("UPDATE accounts SET whatsapp_store_name=?, whatsapp_store_number=? WHERE id=?", normalizedName, normalizedNumber, ownerId);
+        return shoppingStore(ownerId);
+    }
+
+    private static String requiredStoreText(Object value, String field) {
+        if (!(value instanceof String text) || text.trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " is required");
+        }
+        return text;
+    }
+
+    static String normalizeWhatsAppNumber(String raw) {
+        String value = raw.trim();
+        if (value.isEmpty()) bad("whatsappNumber is required");
+        if (!value.matches("\\+?[0-9 .()\\-]+")) bad("whatsappNumber must be a valid phone number");
+        boolean plus = value.startsWith("+");
+        String digits = value.replaceAll("[^0-9]", "");
+        if (!plus && digits.length() == 10) digits = "91" + digits;
+        if (digits.length() < 8 || digits.length() > 15 || digits.startsWith("0")) {
+            bad("whatsappNumber must be a valid phone number");
+        }
+        return "+" + digits;
     }
 
     // Explicit allowlist: client keys never become SQL identifiers.

@@ -1,7 +1,38 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MockPantryApi, seedState } from "./pantry-api";
+import { MockPantryApi, normalizeWhatsAppNumber, seedState } from "./pantry-api";
 import type { InventoryItem } from "@workspace/api-client-react";
+
+test("demo shopping-store responses and phone normalization match the backend contract", async () => {
+  const api = new MockPantryApi();
+  assert.deepEqual(await (await api.fetch("/api/shopping-store")).json(), {
+    storeName: null,
+    whatsappNumber: null,
+  });
+  const saved = await api.fetch("/api/shopping-store", {
+    method: "PATCH",
+    body: JSON.stringify({ storeName: "Sharma Kirana", whatsappNumber: "98765 43210" }),
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(await saved.json(), {
+    storeName: "Sharma Kirana",
+    whatsappNumber: "+919876543210",
+  });
+  assert.deepEqual(await (await api.fetch("/api/shopping-store")).json(), {
+    storeName: "Sharma Kirana",
+    whatsappNumber: "+919876543210",
+  });
+  assert.equal(normalizeWhatsAppNumber("+1 (415) 555-0123"), "+14155550123");
+  assert.deepEqual(normalizeWhatsAppNumber("+00000000"), {
+    error: "whatsappNumber must be a valid phone number",
+  });
+  assert.deepEqual(normalizeWhatsAppNumber("00000000"), {
+    error: "whatsappNumber must be a valid phone number",
+  });
+  assert.deepEqual(normalizeWhatsAppNumber("+1 415 ABC 0123"), {
+    error: "whatsappNumber must be a valid phone number",
+  });
+});
 
 test("demo shopping-list creation and rename share Unicode name validation", async () => {
   const api = new MockPantryApi();

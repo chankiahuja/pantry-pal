@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { WhatsAppStoreHandoff } from "@/components/whatsapp-store-handoff";
 
 export default function ShoppingListDetail() {
   const params = useParams();
@@ -304,6 +305,8 @@ export default function ShoppingListDetail() {
             </CardContent>
           </Card>
         )}
+
+        <WhatsAppStoreHandoff list={list} />
 
         <Card>
           <CardHeader>

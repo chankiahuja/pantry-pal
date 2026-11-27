@@ -22,6 +22,8 @@ tags:
     description: Grocery purchase suggestions
   - name: shopping-lists
     description: Shopping list management
+  - name: shopping-store
+    description: Shopper's preferred WhatsApp store
 paths:
   /account/deletion-status:
     get:
@@ -74,6 +76,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+  /shopping-store:
+    get:
+      operationId: getShoppingStore
+      tags: [shopping-store]
+      summary: Get the signed-in shopper's preferred WhatsApp store
+      responses:
+        "200":
+          description: Saved store details; fields are null until configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingStore"
+        "401":
+          description: Sign in required
+    patch:
+      operationId: updateShoppingStore
+      tags: [shopping-store]
+      summary: Save the signed-in shopper's preferred WhatsApp store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShoppingStoreInput"
+      responses:
+        "200":
+          description: Saved store details, with the phone number normalized to E.164
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingStore"
+        "400":
+          description: Invalid store name or WhatsApp number
+        "401":
+          description: Sign in required
   /auth/code:
     post:
       operationId: requestEmailCode
@@ -1005,6 +1042,29 @@ components:
         - unit
         - reason
         - urgency
+
+    ShoppingStore:
+      type: object
+      properties:
+        storeName:
+          type: [string, "null"]
+        whatsappNumber:
+          type: [string, "null"]
+      required: [storeName, whatsappNumber]
+
+    ShoppingStoreInput:
+      type: object
+      properties:
+        storeName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        whatsappNumber:
+          type: string
+          minLength: 8
+          maxLength: 32
+          description: International number or a ten-digit Indian number; formatting punctuation is accepted and the stored value is normalized to E.164.
+      required: [storeName, whatsappNumber]
 
     ShoppingList:
       type: object

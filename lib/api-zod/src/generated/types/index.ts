@@ -41,3 +41,5 @@ export * from './shoppingListItem';
 export * from './shoppingListItemInput';
 export * from './shoppingListItemUpdate';
 export * from './shoppingListWithItems';
+export * from './shoppingStore';
+export * from './shoppingStoreInput';
