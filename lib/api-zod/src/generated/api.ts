@@ -40,6 +40,36 @@ export const GetAuthSessionResponse = zod.object({
 
 
 /**
+ * @summary Get the signed-in shopper's preferred WhatsApp store
+ */
+export const GetShoppingStoreResponse = zod.object({
+  "storeName": zod.string().nullable(),
+  "whatsappNumber": zod.string().nullable()
+})
+
+
+/**
+ * @summary Save the signed-in shopper's preferred WhatsApp store
+ */
+export const updateShoppingStoreBodyStoreNameMax = 200;
+
+export const updateShoppingStoreBodyWhatsappNumberMin = 8;
+export const updateShoppingStoreBodyWhatsappNumberMax = 32;
+
+
+
+export const UpdateShoppingStoreBody = zod.object({
+  "storeName": zod.string().min(1).max(updateShoppingStoreBodyStoreNameMax),
+  "whatsappNumber": zod.string().min(updateShoppingStoreBodyWhatsappNumberMin).max(updateShoppingStoreBodyWhatsappNumberMax).describe('International number or a ten-digit Indian number; formatting punctuation is accepted and the stored value is normalized to E.164.')
+})
+
+export const UpdateShoppingStoreResponse = zod.object({
+  "storeName": zod.string().nullable(),
+  "whatsappNumber": zod.string().nullable()
+})
+
+
+/**
  * Login requests enqueue delivery and return the same challenge shape whether an account exists or not. Only existing accounts receive login email. SMTP timing and failures do not affect the login response. Signup sends synchronously and may return a delivery error.
  * @summary Request an expiring email code with request limits and resend cooldown
  */

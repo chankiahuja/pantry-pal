@@ -20,6 +20,8 @@ public class PantryController {
         return number.longValue();
     }
     @GetMapping("/healthz") public Object health() { return Map.of("status", "ok"); }
+    @GetMapping("/shopping-store") public Object shoppingStore(Authentication authentication) { return service.shoppingStore(account(authentication)); }
+    @PatchMapping("/shopping-store") public Object updateShoppingStore(@RequestBody Map<String,Object> body, Authentication authentication) { return service.updateShoppingStore(account(authentication), body); }
     @GetMapping("/inventory") public Object inventory(@RequestParam(required=false) String category, @RequestParam(required=false) Boolean lowStock, @RequestParam(required=false) Boolean outOfStock, Authentication authentication) {
         return service.inventory(account(authentication)).stream().filter(i -> category == null || category.equals(i.get("category")))
             .filter(i -> !Boolean.TRUE.equals(lowStock) || (PantryService.number(i,"quantity") > 0 && PantryService.number(i,"quantity") <= PantryService.number(i,"minThreshold")))

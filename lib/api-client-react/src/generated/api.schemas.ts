@@ -232,6 +232,27 @@ export interface GrocerySuggestion {
   urgency: GrocerySuggestionUrgency;
 }
 
+export interface ShoppingStore {
+  /** @nullable */
+  storeName: string | null;
+  /** @nullable */
+  whatsappNumber: string | null;
+}
+
+export interface ShoppingStoreInput {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  storeName: string;
+  /**
+     * International number or a ten-digit Indian number; formatting punctuation is accepted and the stored value is normalized to E.164.
+     * @minLength 8
+     * @maxLength 32
+     */
+  whatsappNumber: string;
+}
+
 export interface ShoppingList {
   id: number;
   name: string;

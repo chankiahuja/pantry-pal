@@ -22,6 +22,7 @@ function normalizeUnit(value: unknown): string | { error: string } {
 type State = {
   inventory: InventoryItem[];
   lists: ShoppingListWithItems[];
+  store?: { storeName: string | null; whatsappNumber: string | null };
   applied: number[];
   revisions?: Record<number, number>;
   adjustments?: {
@@ -91,6 +92,7 @@ export function seedState(): State {
   );
   return {
     inventory,
+    store: { storeName: null, whatsappNumber: null },
     nextId: 100,
     applied: [],
     lists: [
@@ -216,6 +218,16 @@ export class MockPantryApi {
     };
 
     if (parts[0] === "healthz") return this.json({ status: "ok" });
+    if (parts[0] === "shopping-store") {
+      if (method === "GET") return this.json(this.state.store ?? { storeName: null, whatsappNumber: null });
+      if (method === "PATCH") {
+        if (typeof body.storeName !== "string" || !body.storeName.trim()) return this.json({ error: "storeName is required" }, 400);
+        const digits = typeof body.whatsappNumber === "string" ? body.whatsappNumber.replace(/\D/g, "") : "";
+        if (digits.length < 8 || digits.length > 15) return this.json({ error: "whatsappNumber must be a valid phone number" }, 400);
+        this.state.store = { storeName: body.storeName.trim(), whatsappNumber: `+${digits.length === 10 ? `91${digits}` : digits}` };
+        return save(this.state.store);
+      }
+    }
     if (parts[0] === "feedback") {
       if (method === "GET" && parts[1] === "config") return this.json({ supportEmail: null, responseTime: null });
       if (method === "POST") return this.json({ error: "Support is not configured in the browser demo." }, 503);

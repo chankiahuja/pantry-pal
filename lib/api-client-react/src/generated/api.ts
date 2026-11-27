@@ -46,7 +46,9 @@ import type {
   ShoppingListItem,
   ShoppingListItemInput,
   ShoppingListItemUpdate,
-  ShoppingListWithItems
+  ShoppingListWithItems,
+  ShoppingStore,
+  ShoppingStoreInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -301,6 +303,154 @@ export function useGetAuthSession<TData = Awaited<ReturnType<typeof getAuthSessi
 
 
 
+
+export const getGetShoppingStoreUrl = () => {
+
+
+
+
+  return `/api/shopping-store`
+}
+
+/**
+ * @summary Get the signed-in shopper's preferred WhatsApp store
+ */
+export const getShoppingStore = async ( options?: Parameters<typeof customFetch>[1]): Promise<ShoppingStore> => {
+
+  return customFetch<ShoppingStore>(getGetShoppingStoreUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetShoppingStoreQueryKey = () => {
+    return [
+    `/api/shopping-store`
+    ] as const;
+    }
+
+
+export const getGetShoppingStoreQueryOptions = <TData = Awaited<ReturnType<typeof getShoppingStore>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getShoppingStore>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetShoppingStoreQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getShoppingStore>>> = ({ signal }) => getShoppingStore({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getShoppingStore>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetShoppingStoreQueryResult = NonNullable<Awaited<ReturnType<typeof getShoppingStore>>>
+export type GetShoppingStoreQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get the signed-in shopper's preferred WhatsApp store
+ */
+
+export function useGetShoppingStore<TData = Awaited<ReturnType<typeof getShoppingStore>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getShoppingStore>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetShoppingStoreQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateShoppingStoreUrl = () => {
+
+
+
+
+  return `/api/shopping-store`
+}
+
+/**
+ * @summary Save the signed-in shopper's preferred WhatsApp store
+ */
+export const updateShoppingStore = async (shoppingStoreInput: ShoppingStoreInput, options?: Parameters<typeof customFetch>[1]): Promise<ShoppingStore> => {
+
+  return customFetch<ShoppingStore>(getUpdateShoppingStoreUrl(),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(shoppingStoreInput)
+  }
+);}
+
+
+
+
+
+export const getUpdateShoppingStoreMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateShoppingStore>>, TError,{data: BodyType<ShoppingStoreInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateShoppingStore>>, TError,{data: BodyType<ShoppingStoreInput>}, TContext> => {
+
+const mutationKey = ['updateShoppingStore'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateShoppingStore>>, {data: BodyType<ShoppingStoreInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  updateShoppingStore(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateShoppingStoreMutationResult = NonNullable<Awaited<ReturnType<typeof updateShoppingStore>>>
+    export type UpdateShoppingStoreMutationBody = BodyType<ShoppingStoreInput>
+    export type UpdateShoppingStoreMutationError = ErrorType<void>
+
+    /**
+ * @summary Save the signed-in shopper's preferred WhatsApp store
+ */
+export const useUpdateShoppingStore = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateShoppingStore>>, TError,{data: BodyType<ShoppingStoreInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateShoppingStore>>,
+        TError,
+        {data: BodyType<ShoppingStoreInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateShoppingStoreMutationOptions(options));
+    }
 
 export const getRequestEmailCodeUrl = () => {
 
