@@ -19,6 +19,19 @@ function normalizeUnit(value: unknown): string | { error: string } {
   if ([...unit].length > 64) return { error: "unit must be 64 characters or fewer" };
   return unit;
 }
+export function normalizeWhatsAppNumber(value: unknown): string | { error: string } {
+  if (typeof value !== "string") return { error: "whatsappNumber is required" };
+  const trimmed = value.trim();
+  if (!trimmed) return { error: "whatsappNumber is required" };
+  if (!/^\+?[0-9 .()\-]+$/.test(trimmed)) return { error: "whatsappNumber must be a valid phone number" };
+  const international = trimmed.startsWith("+");
+  let digits = trimmed.replace(/[^0-9]/g, "");
+  if (digits.length < 8 || digits.length > 15 || (international && digits.startsWith("0"))) {
+    return { error: "whatsappNumber must be a valid phone number" };
+  }
+  if (!international && digits.length === 10) digits = `91${digits}`;
+  return `+${digits}`;
+}
 type State = {
   inventory: InventoryItem[];
   lists: ShoppingListWithItems[];
@@ -222,9 +235,9 @@ export class MockPantryApi {
       if (method === "GET") return this.json(this.state.store ?? { storeName: null, whatsappNumber: null });
       if (method === "PATCH") {
         if (typeof body.storeName !== "string" || !body.storeName.trim()) return this.json({ error: "storeName is required" }, 400);
-        const digits = typeof body.whatsappNumber === "string" ? body.whatsappNumber.replace(/\D/g, "") : "";
-        if (digits.length < 8 || digits.length > 15) return this.json({ error: "whatsappNumber must be a valid phone number" }, 400);
-        this.state.store = { storeName: body.storeName.trim(), whatsappNumber: `+${digits.length === 10 ? `91${digits}` : digits}` };
+        const number = normalizeWhatsAppNumber(body.whatsappNumber);
+        if (typeof number !== "string") return this.json(number, 400);
+        this.state.store = { storeName: body.storeName.trim(), whatsappNumber: number };
         return save(this.state.store);
       }
     }

@@ -34,6 +34,16 @@ function buildMessage(list: ShoppingListWithItems, storeName: string, pickupTime
   ].filter((line): line is string => line !== null).join("\n");
 }
 
+export async function copyMessageToClipboard(message: string): Promise<boolean> {
+  try {
+    if (!navigator.clipboard?.writeText) return false;
+    await navigator.clipboard.writeText(message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function WhatsAppStoreHandoff({ list }: WhatsAppStoreHandoffProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -74,8 +84,11 @@ export function WhatsAppStoreHandoff({ list }: WhatsAppStoreHandoffProps) {
   };
 
   const copyMessage = async () => {
-    await navigator.clipboard.writeText(message);
-    toast({ title: "Message copied", description: "Paste it into the store's WhatsApp chat." });
+    if (await copyMessageToClipboard(message)) {
+      toast({ title: "Message copied", description: "Paste it into the store's WhatsApp chat." });
+    } else {
+      toast({ title: "Copy unavailable", description: "The message is still visible above. Select it and copy it manually.", variant: "destructive" });
+    }
   };
 
   const openWhatsApp = () => {
