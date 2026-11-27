@@ -11,7 +11,7 @@ Object.defineProperties(globalThis, {
   navigator: { configurable: true, value: dom.window.navigator },
 });
 
-const { copyMessageToClipboard } = await import("./whatsapp-store-handoff");
+const { copyMessageToClipboard, formatStoreGreeting } = await import("./whatsapp-store-handoff");
 
 afterEach(() => {
   Object.defineProperty(globalThis.navigator, "clipboard", {
@@ -34,4 +34,9 @@ test("clipboard rejection leaves the preview available for manual copying", asyn
 
 test("missing clipboard support is reported as unavailable", async () => {
   assert.equal(await copyMessageToClipboard("preview"), false);
+});
+
+test("preview greeting uses the typed store name and stays blank-safe", () => {
+  assert.equal(formatStoreGreeting("Sharma Kirana"), "Hello Sharma Kirana,");
+  assert.equal(formatStoreGreeting(""), "Hello,");
 });

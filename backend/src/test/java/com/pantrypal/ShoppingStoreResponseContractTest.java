@@ -74,6 +74,8 @@ class ShoppingStoreResponseContractTest {
         assertThat(PantryService.normalizeWhatsAppNumber("+1 (415) 555-0123")).isEqualTo("+14155550123");
         assertThatThrownBy(() -> PantryService.normalizeWhatsAppNumber("+00000000"))
             .hasMessageContaining("whatsappNumber must be a valid phone number");
+        assertThatThrownBy(() -> PantryService.normalizeWhatsAppNumber("00000000"))
+            .hasMessageContaining("whatsappNumber must be a valid phone number");
         assertThatThrownBy(() -> PantryService.normalizeWhatsAppNumber("+1 415 ABC 0123"))
             .hasMessageContaining("whatsappNumber must be a valid phone number");
     }

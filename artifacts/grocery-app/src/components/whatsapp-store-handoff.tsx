@@ -16,6 +16,11 @@ interface WhatsAppStoreHandoffProps {
   list: ShoppingListWithItems;
 }
 
+export function formatStoreGreeting(storeName: string) {
+  const trimmed = storeName.trim();
+  return `Hello${trimmed ? ` ${trimmed}` : ""},`;
+}
+
 function buildMessage(list: ShoppingListWithItems, storeName: string, pickupTime: string) {
   const items = list.items.filter((item) => !item.purchased);
   const lines = items.map((item) => {
@@ -23,7 +28,7 @@ function buildMessage(list: ShoppingListWithItems, storeName: string, pickupTime
     return `- ${item.name}: ${item.quantity} ${item.unit}${notes}`;
   });
   return [
-    `Hello ${storeName},`,
+    formatStoreGreeting(storeName),
     "",
     `Please prepare this pickup from my PantryPal list (${list.name}):`,
     ...lines,
@@ -56,7 +61,8 @@ export function WhatsAppStoreHandoff({ list }: WhatsAppStoreHandoffProps) {
 
   const savedName = store?.storeName ?? "";
   const savedNumber = store?.whatsappNumber ?? "";
-  const name = editing ? storeName : savedName;
+  const setupFormVisible = editing || !savedName || !savedNumber;
+  const name = setupFormVisible ? storeName : savedName;
   const number = editing ? whatsappNumber : savedNumber;
   const itemsToBuy = useMemo(() => list.items.filter((item) => !item.purchased), [list.items]);
   const message = buildMessage(list, name, pickupTime);

@@ -26,10 +26,10 @@ export function normalizeWhatsAppNumber(value: unknown): string | { error: strin
   if (!/^\+?[0-9 .()\-]+$/.test(trimmed)) return { error: "whatsappNumber must be a valid phone number" };
   const international = trimmed.startsWith("+");
   let digits = trimmed.replace(/[^0-9]/g, "");
-  if (digits.length < 8 || digits.length > 15 || (international && digits.startsWith("0"))) {
+  if (!international && digits.length === 10) digits = `91${digits}`;
+  if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) {
     return { error: "whatsappNumber must be a valid phone number" };
   }
-  if (!international && digits.length === 10) digits = `91${digits}`;
   return `+${digits}`;
 }
 type State = {

@@ -92,9 +92,10 @@ public class PantryService {
         if (!value.matches("\\+?[0-9 .()\\-]+")) bad("whatsappNumber must be a valid phone number");
         boolean plus = value.startsWith("+");
         String digits = value.replaceAll("[^0-9]", "");
-        if (digits.length() < 8 || digits.length() > 15) bad("whatsappNumber must be a valid phone number");
-        if (plus && digits.startsWith("0")) bad("whatsappNumber must be a valid phone number");
         if (!plus && digits.length() == 10) digits = "91" + digits;
+        if (digits.length() < 8 || digits.length() > 15 || digits.startsWith("0")) {
+            bad("whatsappNumber must be a valid phone number");
+        }
         return "+" + digits;
     }
 

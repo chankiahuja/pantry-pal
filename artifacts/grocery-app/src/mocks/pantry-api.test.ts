@@ -26,6 +26,9 @@ test("demo shopping-store responses and phone normalization match the backend co
   assert.deepEqual(normalizeWhatsAppNumber("+00000000"), {
     error: "whatsappNumber must be a valid phone number",
   });
+  assert.deepEqual(normalizeWhatsAppNumber("00000000"), {
+    error: "whatsappNumber must be a valid phone number",
+  });
   assert.deepEqual(normalizeWhatsAppNumber("+1 415 ABC 0123"), {
     error: "whatsappNumber must be a valid phone number",
   });
